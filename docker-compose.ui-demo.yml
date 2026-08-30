@@ -1,0 +1,31 @@
+networks:
+  hotel_ui_demo_network:
+    driver: bridge
+
+services:
+  mock-api:
+    build:
+      context: ./demo-mock-api
+      dockerfile: Dockerfile
+    container_name: hotel_ui_demo_api
+    restart: unless-stopped
+    ports:
+      - '3004:3004'
+    networks:
+      - hotel_ui_demo_network
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://192.168.1.252:3004
+        NEXT_PUBLIC_DEMO_MODE: 'true'
+    container_name: hotel_ui_demo_web
+    restart: unless-stopped
+    depends_on:
+      - mock-api
+    ports:
+      - '3002:3000'
+    networks:
+      - hotel_ui_demo_network

@@ -1,0 +1,98 @@
+# Hotel Management System – Docker Compose
+# NOTE: Uses isolated network "hotel_network" – does NOT touch any other containers (e.g. n8n)
+
+networks:
+  hotel_network:
+    driver: bridge
+
+volumes:
+  hotel_postgres_data:
+  hotel_uploads_data:
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: hotel_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB}"
+    ports:
+      - '5433:5432'   # external 5433 to avoid conflicts with existing postgres
+    volumes:
+      - hotel_postgres_data:/var/lib/postgresql/data
+    networks:
+      - hotel_network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hotel_user -d hotel_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend API (NestJS) ────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: hotel_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "${DATABASE_URL}"
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_EXPIRES_IN: "${JWT_EXPIRES_IN:-7d}"
+      API_PORT: 3001
+      NODE_ENV: production
+      ZALO_USER_SERVER_BASE_URL: "${ZALO_USER_SERVER_BASE_URL:-https://zl.tehui.io.vn}"
+      CHIHOME_BOOKING_BRIDGE_SECRET: "${CHIHOME_BOOKING_BRIDGE_SECRET}"
+      BOOKING_AUTOMATION_WEBHOOK_URL: "${BOOKING_AUTOMATION_WEBHOOK_URL:-}"
+      BOOKING_AUTOMATION_WEBHOOK_SECRET: "${BOOKING_AUTOMATION_WEBHOOK_SECRET}"
+      ADDON_ORDER_PUBLIC_BASE_URL: "${ADDON_ORDER_PUBLIC_BASE_URL:-https://menu.chiluxe.vn}"
+      ADDON_ORDER_VIETQR_BANK_ID: "${ADDON_ORDER_VIETQR_BANK_ID}"
+      ADDON_ORDER_VIETQR_ACCOUNT_NO: "${ADDON_ORDER_VIETQR_ACCOUNT_NO}"
+      ADDON_ORDER_VIETQR_ACCOUNT_NAME: "${ADDON_ORDER_VIETQR_ACCOUNT_NAME}"
+      SEPAY_WEBHOOK_SECRET: "${SEPAY_WEBHOOK_SECRET}"
+    ports:
+      - '3001:3001'
+    volumes:
+      - hotel_uploads_data:/app/uploads
+    networks:
+      - hotel_network
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3001/api/health\").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ── Frontend (Next.js) ──────────────────────────────────────────────────────
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.tehui.io.vn}"
+    container_name: hotel_web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      CHIHOME_BOOKING_BRIDGE_SECRET: "${CHIHOME_BOOKING_BRIDGE_SECRET}"
+      BOOKING_BRIDGE_SECRET: 5804
+      HOTEL_BRIDGE_API_KEY: hk_17bc30088d769d96c553e0212af5ed248e0101f81ce82526
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.tehui.io.vn}"
+    ports:
+      - '3000:3000'
+    networks:
+      - hotel_network
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3000/dashboard\").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s

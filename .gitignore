@@ -1,0 +1,40 @@
+# Dependencies and build output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+generated/
+*.tsbuildinfo
+
+# Secrets and local environment
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime data, dumps, uploads and backups
+backups/
+uploads/
+data/
+*.sql
+*.dump
+*.backup
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+HANDOFF.txt
+
+# Logs/editor/OS
+*.log
+.DS_Store
+.vscode/
+.idea/

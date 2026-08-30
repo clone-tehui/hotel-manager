@@ -1,0 +1,66 @@
+networks:
+  hotel_demo_network:
+    driver: bridge
+
+volumes:
+  hotel_demo_postgres_data:
+  hotel_demo_uploads_data:
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hotel_demo_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hotel_demo_user
+      POSTGRES_PASSWORD: hotel_demo_pass
+      POSTGRES_DB: hotel_demo_db
+    ports:
+      - '5434:5432'
+    volumes:
+      - hotel_demo_postgres_data:/var/lib/postgresql/data
+    networks:
+      - hotel_demo_network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hotel_demo_user -d hotel_demo_db']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: hotel_demo_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hotel_demo_user:hotel_demo_pass@db:5432/hotel_demo_db
+      JWT_SECRET: change_me_demo_only
+      JWT_EXPIRES_IN: 7d
+      API_PORT: 3001
+      NODE_ENV: production
+      FRONTEND_URL: http://192.168.1.252:3002
+    ports:
+      - '3003:3001'
+    volumes:
+      - hotel_demo_uploads_data:/home/node/app/uploads
+    networks:
+      - hotel_demo_network
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://192.168.1.252:3003
+    container_name: hotel_demo_web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '3002:3000'
+    networks:
+      - hotel_demo_network
