@@ -27,6 +27,8 @@ RUN apt-get update \
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/src/ai-ceo-agent/AGENT.md ./dist/src/ai-ceo-agent/AGENT.md
+COPY --from=builder /app/src/ai-ceo-agent/KNOWLEDGE.md ./dist/src/ai-ceo-agent/KNOWLEDGE.md
 COPY --from=builder /app/prisma ./prisma
 
 EXPOSE 3001

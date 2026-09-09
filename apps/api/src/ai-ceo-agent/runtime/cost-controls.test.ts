@@ -1,0 +1,11 @@
+import { strict as assert } from 'assert';
+import { DEFAULT_RUN_CONTROLS, assertRunControls, circuitAllows, circuitFailure, circuitSuccess, sanitizeControls } from './cost-controls';
+const controls = { ...DEFAULT_RUN_CONTROLS, maxRunsPerDay: 2, maxBatchesPerRun: 3, maxConcurrentRuns: 1, failureThreshold: 2, cooldownMs: 1000 };
+assert.throws(() => assertRunControls({ batches: 1, runsToday: 0, activeRuns: 1, controls }), /concurrent/);
+assert.throws(() => assertRunControls({ batches: 1, runsToday: 2, activeRuns: 0, controls }), /daily run/);
+assert.throws(() => assertRunControls({ batches: 4, runsToday: 0, activeRuns: 0, controls }), /batch limit/);
+assert.doesNotThrow(() => assertRunControls({ batches: 3, runsToday: 1, activeRuns: 0, controls }));
+assert.deepEqual(sanitizeControls({ maxRunsPerDay: -2, maxBatchesPerRun: 999, cooldownMs: 1 }), { ...DEFAULT_RUN_CONTROLS, maxRunsPerDay: 1, maxBatchesPerRun: 100, cooldownMs: 60_000 });
+const first = circuitFailure(circuitSuccess(), controls, 100); assert.equal(circuitAllows(first, 100), true);
+const opened = circuitFailure(first, controls, 100); assert.equal(circuitAllows(opened, 100), false); assert.equal(circuitAllows(opened, 1100), true);
+console.log('run-controls tests passed');

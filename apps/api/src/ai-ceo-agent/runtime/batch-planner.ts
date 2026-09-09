@@ -1,0 +1,4 @@
+export type RoomBatchPlan = { sequence:number; roomIds:string[]; periodKeys:string[] };
+export function planRoomBatches(roomIds:string[],periodKeys:string[],batchSize:number):RoomBatchPlan[]{if(!Number.isInteger(batchSize)||batchSize<1||batchSize>50)throw new Error('batchSize must be 1..50');const unique=[...new Set(roomIds)];const rows:RoomBatchPlan[]=[];for(let i=0;i<unique.length;i+=batchSize)rows.push({sequence:rows.length+1,roomIds:unique.slice(i,i+batchSize),periodKeys:[...periodKeys]});return rows;}
+export function progress(completed:number,failed:number,total:number){if(total<=0)return 0;return Math.max(0,Math.min(100,Math.round(((completed+failed)/total)*100)));}
+export function aggregateBatchStatus(completed:number,failed:number,total:number){if(total===0)return 'FAILED';if(completed===total)return 'COMPLETED';if(completed>0&&completed+failed===total)return 'PARTIAL';if(failed===total)return 'FAILED';return 'ANALYZING';}

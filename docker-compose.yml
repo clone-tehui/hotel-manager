@@ -20,7 +20,7 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
       POSTGRES_DB: "${POSTGRES_DB}"
     ports:
-      - '5433:5432'   # external 5433 to avoid conflicts with existing postgres
+      - '127.0.0.1:5433:5432'   # loopback-only; Docker network remains available to services
     volumes:
       - hotel_postgres_data:/var/lib/postgresql/data
     networks:
@@ -45,6 +45,8 @@ services:
       DATABASE_URL: "${DATABASE_URL}"
       JWT_SECRET: "${JWT_SECRET}"
       JWT_EXPIRES_IN: "${JWT_EXPIRES_IN:-7d}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      AI_CEO_WORKER_ENABLED: "${AI_CEO_WORKER_ENABLED:-false}"
       API_PORT: 3001
       NODE_ENV: production
       ZALO_USER_SERVER_BASE_URL: "${ZALO_USER_SERVER_BASE_URL:-https://zl.tehui.io.vn}"
@@ -57,7 +59,7 @@ services:
       ADDON_ORDER_VIETQR_ACCOUNT_NAME: "${ADDON_ORDER_VIETQR_ACCOUNT_NAME}"
       SEPAY_WEBHOOK_SECRET: "${SEPAY_WEBHOOK_SECRET}"
     ports:
-      - '3001:3001'
+      - '127.0.0.1:3001:3001'
     volumes:
       - hotel_uploads_data:/app/uploads
     networks:
@@ -75,7 +77,7 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.tehui.io.vn}"
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.chiluxe.vn}"
     container_name: hotel_web
     restart: unless-stopped
     depends_on:
@@ -83,11 +85,11 @@ services:
         condition: service_healthy
     environment:
       CHIHOME_BOOKING_BRIDGE_SECRET: "${CHIHOME_BOOKING_BRIDGE_SECRET}"
-      BOOKING_BRIDGE_SECRET: 5804
-      HOTEL_BRIDGE_API_KEY: hk_17bc30088d769d96c553e0212af5ed248e0101f81ce82526
-      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.tehui.io.vn}"
+      BOOKING_BRIDGE_SECRET: "${BOOKING_BRIDGE_SECRET:-}"
+      HOTEL_BRIDGE_API_KEY: "${HOTEL_BRIDGE_API_KEY:-}"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.chiluxe.vn}"
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
     networks:
       - hotel_network
     healthcheck:

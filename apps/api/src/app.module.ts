@@ -15,6 +15,8 @@ import { ApiKeysModule } from './api-keys/api-keys.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AddonsModule } from './addons/addons.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { AiCeoAgentModule } from './ai-ceo-agent/ai-ceo-agent.module';
+import { OtaConnectorsModule } from './ota-connectors/ota-connectors.module';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     ApiKeysModule,
     DashboardModule,
     AddonsModule,
+    AiCeoAgentModule,
+    OtaConnectorsModule,
   ],
 })
 export class AppModule {}

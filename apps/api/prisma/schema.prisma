@@ -17,20 +17,20 @@ enum UserRole {
 }
 
 enum RoomStatus {
-  VACANT       // trống, sẵn sàng
-  RESERVED     // đã có booking
-  OCCUPIED     // khách đang ở
-  DIRTY        // cần dọn (sau checkout)
-  MAINTENANCE  // đang bảo trì
+  VACANT // trống, sẵn sàng
+  RESERVED // đã có booking
+  OCCUPIED // khách đang ở
+  DIRTY // cần dọn (sau checkout)
+  MAINTENANCE // đang bảo trì
 }
 
 enum ReservationStatus {
-  PENDING          // mới tạo, chưa xác nhận
-  BOOKED           // đã xác nhận
-  PENDING_CHECKIN  // sắp/sẵn sàng check-in
-  IN_HOUSE         // đang lưu trú
-  CHECKED_OUT      // đã trả phòng
-  CANCELLED        // đã huỷ
+  PENDING // mới tạo, chưa xác nhận
+  BOOKED // đã xác nhận
+  PENDING_CHECKIN // sắp/sẵn sàng check-in
+  IN_HOUSE // đang lưu trú
+  CHECKED_OUT // đã trả phòng
+  CANCELLED // đã huỷ
 }
 
 enum PaymentMethod {
@@ -75,6 +75,45 @@ enum GuestGender {
   MALE
   FEMALE
   NON_BINARY
+}
+
+enum AiAgentRunStatus {
+  QUEUED
+  SNAPSHOTTING
+  PLANNING
+  INVESTIGATING
+  ANALYZING
+  VERIFYING
+  SUMMARIZING
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum AiAgentBatchStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AiToolCallStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AiCampaignStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  RUNNING
+  REVIEW_DUE
+  COMPLETED
+  CANCELLED
 }
 
 // ─── Models ───────────────────────────────────────────────────────────────────
@@ -134,26 +173,26 @@ model RoomType {
 // ── Rooms ─────────────────────────────────────────────────────────────────────
 
 model Room {
-  id          String     @id @default(cuid())
-  number      String     // mã căn/phòng (unique per building)
-  floor       Int?
-  status      RoomStatus @default(VACANT)
-  price       Decimal?   @db.Decimal(12, 2)
-  discountablePrice Decimal? @db.Decimal(12, 2)
-  monthlyCost Decimal? @db.Decimal(15, 2)
-  building    Building   @relation(fields: [buildingId], references: [id])
-  buildingId  String
-  roomType    RoomType   @relation(fields: [roomTypeId], references: [id])
-  roomTypeId  String
-  description String?
-  note        String?
-  isActive    Boolean    @default(true)
-  deletedAt   DateTime?  // soft delete
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id                String     @id @default(cuid())
+  number            String // mã căn/phòng (unique per building)
+  floor             Int?
+  status            RoomStatus @default(VACANT)
+  price             Decimal?   @db.Decimal(12, 2)
+  discountablePrice Decimal?   @db.Decimal(12, 2)
+  monthlyCost       Decimal?   @db.Decimal(15, 2)
+  building          Building   @relation(fields: [buildingId], references: [id])
+  buildingId        String
+  roomType          RoomType   @relation(fields: [roomTypeId], references: [id])
+  roomTypeId        String
+  description       String?
+  note              String?
+  isActive          Boolean    @default(true)
+  deletedAt         DateTime? // soft delete
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
-  reservations Reservation[]
-  images       RoomImage[]
+  reservations   Reservation[]
+  images         RoomImage[]
   addonOverrides RoomAddonProductOverride[]
   addonOrders    AddonOrder[]
 
@@ -167,36 +206,36 @@ model Room {
 // ── Guests ────────────────────────────────────────────────────────────────────
 
 model RoomImage {
-  id         String   @id @default(cuid())
-  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  roomId     String
-  url        String
-  thumbUrl   String?
-  sortOrder  Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(cuid())
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId    String
+  url       String
+  thumbUrl  String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([roomId, sortOrder])
   @@map("room_images")
 }
 
 model Guest {
-  id          String      @id @default(cuid())
+  id          String       @id @default(cuid())
   fullName    String
   email       String?
   phone       String?
   gender      GuestGender?
-  idType      IdType      @default(NATIONAL_ID)
-  idNumber    String?   @unique
+  idType      IdType       @default(NATIONAL_ID)
+  idNumber    String?      @unique
   nationality String?
   company     String?
   taxCode     String?
   address     String?
   dateOfBirth DateTime?
   notes       String?
-  isVip       Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  isVip       Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   reservationGuests ReservationGuest[]
 
@@ -206,39 +245,39 @@ model Guest {
 // ── Reservations ──────────────────────────────────────────────────────────────
 
 model Reservation {
-  id                String            @id @default(cuid())
-  reservationCode   String            @unique
-  room              Room              @relation(fields: [roomId], references: [id])
-  roomId            String
-  primaryGuestName  String
-  company           String?
-  checkInDate       DateTime
-  checkOutDate      DateTime
-  actualCheckIn     DateTime?
-  actualCheckOut    DateTime?
-  adults            Int               @default(1)
-  children          Int               @default(0)
-  ratePlanName      String?
-  pricePerNight     Decimal           @db.Decimal(12, 2)
-  totalNights       Int
-  totalAmount       Decimal           @db.Decimal(12, 2)
-  depositAmount     Decimal           @db.Decimal(12, 2) @default(0)
-  discountAmount    Decimal           @db.Decimal(12, 2) @default(0)
-  status            ReservationStatus @default(PENDING)
-  cancelReason      String?
-  cancelledAt       DateTime?
-  source            String?
-  threadId          String?
-  notes             String?
-  internalNotes     String?
-  createdBy         String?
-  deletedAt         DateTime?         // soft delete for drafts
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  id               String            @id @default(cuid())
+  reservationCode  String            @unique
+  room             Room              @relation(fields: [roomId], references: [id])
+  roomId           String
+  primaryGuestName String
+  company          String?
+  checkInDate      DateTime
+  checkOutDate     DateTime
+  actualCheckIn    DateTime?
+  actualCheckOut   DateTime?
+  adults           Int               @default(1)
+  children         Int               @default(0)
+  ratePlanName     String?
+  pricePerNight    Decimal           @db.Decimal(12, 2)
+  totalNights      Int
+  totalAmount      Decimal           @db.Decimal(12, 2)
+  depositAmount    Decimal           @default(0) @db.Decimal(12, 2)
+  discountAmount   Decimal           @default(0) @db.Decimal(12, 2)
+  status           ReservationStatus @default(PENDING)
+  cancelReason     String?
+  cancelledAt      DateTime?
+  source           String?
+  threadId         String?
+  notes            String?
+  internalNotes    String?
+  createdBy        String?
+  deletedAt        DateTime? // soft delete for drafts
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
-  guests   ReservationGuest[]
-  payments Payment[]
-  logs     ReservationLog[]
+  guests      ReservationGuest[]
+  payments    Payment[]
+  logs        ReservationLog[]
   addonOrders AddonOrder[]
 
   @@index([roomId, status, checkInDate, checkOutDate])
@@ -327,15 +366,15 @@ model WebhookDeliveryLog {
 // ── API Keys ──────────────────────────────────────────────────────────────────
 
 model ApiKey {
-  id          String    @id @default(cuid())
-  name        String
-  keyPrefix   String    // first 8 chars of key (for display)
-  keyHash     String    @unique // bcrypt hash of the full key
-  scopes      String[]  @default([])
-  isActive    Boolean   @default(true)
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id         String    @id @default(cuid())
+  name       String
+  keyPrefix  String // first 8 chars of key (for display)
+  keyHash    String    @unique // bcrypt hash of the full key
+  scopes     String[]  @default([])
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@map("api_keys")
 }
@@ -348,6 +387,215 @@ model SystemSetting {
   updatedAt DateTime @updatedAt
 
   @@map("system_settings")
+}
+
+// ── ChiHome AI CEO Agent ────────────────────────────────────────────────────
+
+model AiAgentRun {
+  id               String           @id @default(cuid())
+  status           AiAgentRunStatus @default(RUNNING)
+  trigger          String           @default("manual")
+  model            String
+  periodKeys       String[]
+  inputSummary     Json?
+  toolCalls        Json?
+  output           Json?
+  error            String?
+  promptTokens     Int?
+  completionTokens Int?
+  createdBy        String?
+  startedAt        DateTime         @default(now())
+  completedAt      DateTime?
+
+  parentRunId             String?
+  runMode                 String    @default("PORTFOLIO_REVIEW")
+  provider                String    @default("openrouter")
+  resolvedModel           String?
+  promptVersion           String?
+  agentPolicyVersion      String?
+  knowledgeVersion        String?
+  currentPhase            String?
+  progress                Int       @default(0)
+  totalBatches            Int       @default(0)
+  completedBatches        Int       @default(0)
+  failedBatches           Int       @default(0)
+  reasoningTokens         Int?
+  estimatedCost           Decimal?  @db.Decimal(18, 8)
+  cancellationRequestedAt DateTime?
+  heartbeatAt             DateTime?
+
+  campaigns       AiCampaign[]
+  batches         AiAgentRunBatch[]
+  toolCallRecords AiAgentToolCall[]
+  snapshots       AiAgentSnapshot[]
+
+  @@index([status, startedAt])
+  @@map("ai_agent_runs")
+}
+
+model AiAgentRunBatch {
+  id               String             @id @default(cuid())
+  run              AiAgentRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId            String
+  sequence         Int
+  status           AiAgentBatchStatus @default(QUEUED)
+  roomIds          String[]
+  periodKeys       String[]
+  inputSnapshot    Json?
+  result           Json?
+  error            String?
+  retryCount       Int                @default(0)
+  promptTokens     Int?
+  completionTokens Int?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@unique([runId, sequence])
+  @@index([runId, status, sequence])
+  @@map("ai_agent_run_batches")
+}
+
+model AiAgentToolCall {
+  id             String           @id @default(cuid())
+  run            AiAgentRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId          String
+  step           Int
+  toolName       String
+  input          Json
+  output         Json?
+  status         AiToolCallStatus @default(RUNNING)
+  error          String?
+  durationMs     Int?
+  sourceMetadata Json?
+  createdAt      DateTime         @default(now())
+  completedAt    DateTime?
+
+  @@unique([runId, step])
+  @@index([runId, step])
+  @@index([toolName, status, createdAt])
+  @@map("ai_agent_tool_calls")
+}
+
+model AiAgentSnapshot {
+  id               String     @id @default(cuid())
+  run              AiAgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  runId            String
+  businessTimezone String
+  periods          Json
+  roomMetrics      Json
+  portfolioMetrics Json?
+  companyMetrics   Json?
+  freshness        Json
+  generatedAt      DateTime   @default(now())
+
+  @@index([runId, generatedAt])
+  @@map("ai_agent_snapshots")
+}
+
+model AiAgentMemory {
+  id                 String    @id @default(cuid())
+  category           String
+  key                String
+  content            Json
+  provenance         Json      @default("{}")
+  confidence         Int       @default(50)
+  status             String    @default("ACTIVE")
+  importance         Int       @default(5)
+  expiresAt          DateTime?
+  invalidatedAt      DateTime?
+  invalidatedBy      String?
+  invalidationReason String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([category, key])
+  @@index([category, status, importance, updatedAt])
+  @@map("ai_agent_memories")
+}
+
+model AiCampaign {
+  id              String           @id @default(cuid())
+  run             AiAgentRun?      @relation(fields: [runId], references: [id], onDelete: SetNull)
+  runId           String?
+  roomId          String
+  roomNumber      String
+  periodKey       String
+  periodFrom      DateTime
+  periodTo        DateTime
+  objective       String
+  strategy        Json
+  baseline        Json
+  status          AiCampaignStatus @default(PROPOSED)
+  reviewAfterDays Int              @default(3)
+  reviewDueAt     DateTime
+  reviewedAt      DateTime?
+  reviewResult    Json?
+  measurementStatus String?
+  measurementOutcome String?
+  measuredAt      DateTime?
+  measurementSource Json?
+  approvedBy      String?
+  approvedAt      DateTime?
+  approvalReason  String?
+  approvalSnapshot Json?
+  rejectionReason String?
+  rejectedBy      String?
+  rejectedAt      DateTime?
+  externalActions Json?
+  transitions     AiCampaignTransition[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([roomId, periodKey, status])
+  @@index([status, reviewDueAt])
+  @@index([measurementStatus, measuredAt])
+  @@map("ai_campaigns")
+}
+
+model AiCampaignTransition {
+  id         String           @id @default(cuid())
+  campaign   AiCampaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId String
+  fromStatus AiCampaignStatus
+  toStatus   AiCampaignStatus
+  actorId    String?
+  reason     String?
+  createdAt  DateTime         @default(now())
+
+  @@index([campaignId, createdAt])
+  @@map("ai_campaign_transitions")
+}
+
+// ── OTA connector framework ─────────────────────────────────────────────────
+// Credential values are AES-GCM ciphertext only. No OTA adapter is enabled by
+// this framework, so it fails closed and AI cannot execute external actions.
+model OtaConnector {
+  id                   String   @id @default(cuid())
+  channel              String   @unique
+  displayName          String
+  enabled              Boolean  @default(false)
+  credentialCiphertext String?
+  credentialMetadata   Json?
+  createdBy            String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  audits               OtaConnectorAudit[]
+  @@map("ota_connectors")
+}
+
+model OtaConnectorAudit {
+  id          String       @id @default(cuid())
+  connector   OtaConnector @relation(fields: [connectorId], references: [id], onDelete: Restrict)
+  connectorId String
+  action      String
+  actorId     String?
+  request     Json?
+  result      Json?
+  createdAt   DateTime     @default(now())
+  @@index([connectorId, createdAt])
+  @@map("ota_connector_audits")
 }
 
 // ── Room Sales Add-on / QR Order ─────────────────────────────────────────────
@@ -368,17 +616,17 @@ model AddonCategory {
 }
 
 model AddonProduct {
-  id          String   @id @default(cuid())
+  id          String         @id @default(cuid())
   category    AddonCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   categoryId  String?
   name        String
   description String?
   imageUrl    String?
-  price       Decimal  @db.Decimal(12, 2)
-  sortOrder   Int      @default(0)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  price       Decimal        @db.Decimal(12, 2)
+  sortOrder   Int            @default(0)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
   roomOverrides RoomAddonProductOverride[]
   orderItems    AddonOrderItem[]
@@ -388,15 +636,15 @@ model AddonProduct {
 }
 
 model RoomAddonProductOverride {
-  id          String   @id @default(cuid())
-  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  id          String       @id @default(cuid())
+  room        Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
   roomId      String
   product     AddonProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
   productId   String
-  isAvailable Boolean  @default(true)
-  customPrice Decimal? @db.Decimal(12, 2)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isAvailable Boolean      @default(true)
+  customPrice Decimal?     @db.Decimal(12, 2)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   @@unique([roomId, productId])
   @@index([roomId, isAvailable])
@@ -429,17 +677,17 @@ model AddonOrder {
 }
 
 model AddonOrderItem {
-  id          String      @id @default(cuid())
-  order       AddonOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  id          String        @id @default(cuid())
+  order       AddonOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   orderId     String
   product     AddonProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
   productId   String?
   productName String
-  unitPrice   Decimal     @db.Decimal(12, 2)
+  unitPrice   Decimal       @db.Decimal(12, 2)
   quantity    Int
-  lineTotal   Decimal     @db.Decimal(12, 2)
+  lineTotal   Decimal       @db.Decimal(12, 2)
   note        String?
-  createdAt   DateTime    @default(now())
+  createdAt   DateTime      @default(now())
 
   @@index([orderId])
   @@map("addon_order_items")

@@ -1,0 +1,4 @@
+import{test}from'node:test';import*as assert from'node:assert/strict';import{aggregateBatchStatus,planRoomBatches,progress}from'./batch-planner';
+test('plans about 100 rooms without one giant batch and deduplicates IDs',()=>{const ids=Array.from({length:100},(_,i)=>`r${i+1}`);ids.push('r1');const batches=planRoomBatches(ids,['thisWeek','thisMonth'],15);assert.equal(batches.length,7);assert.equal(batches[0].roomIds.length,15);assert.equal(batches[6].roomIds.length,10);assert.equal(new Set(batches.flatMap(x=>x.roomIds)).size,100);});
+test('partial failure preserves completed batches',()=>{assert.equal(progress(5,1,10),60);assert.equal(aggregateBatchStatus(9,1,10),'PARTIAL');assert.equal(aggregateBatchStatus(10,0,10),'COMPLETED');assert.equal(aggregateBatchStatus(0,10,10),'FAILED');});
+test('rejects unsafe batch sizes',()=>{assert.throws(()=>planRoomBatches(['r'],[],0));assert.throws(()=>planRoomBatches(['r'],[],51));});

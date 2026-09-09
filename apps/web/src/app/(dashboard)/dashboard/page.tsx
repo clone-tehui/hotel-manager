@@ -44,7 +44,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import dayjs from 'dayjs';
 import quarterOfYear from 'dayjs/plugin/quarterOfYear';
 import 'dayjs/locale/vi';
-import { useDashboardReport, useDashboardSummary } from '@/hooks/api';
+import { useAiCeoCampaigns, useDashboardReport, useDashboardSummary } from '@/hooks/api';
 import { StatusChip } from '@/components/common/StatusChip';
 import { ReservationDrawer } from '@/components/reservation/ReservationDrawer';
 
@@ -93,20 +93,44 @@ function getOccupancyStrategyPeriods(now = dayjs()): StrategyPeriodConfig[] {
   return periods;
 }
 
-function getRoomStrategy(room: any, kind: 'week' | 'month') {
+type RoomPricingStrategy = {
+  level: 'Đỏ' | 'Vàng' | 'Xanh' | 'Chờ giá vốn';
+  color: 'error' | 'warning' | 'success' | 'default';
+  text: string;
+  action: string;
+  review: string;
+};
+
+function getRoomPricingStrategy(room: any, currentMonthRoom: any, kind: 'week' | 'month'): RoomPricingStrategy {
   const total = Number(room.totalNightsInPeriod ?? 0);
   const occupied = Number(room.occupiedNights ?? 0);
   const vacant = Math.max(0, total - occupied);
   const rate = Number(room.occupancyRate ?? 0);
-  if (kind === 'week') {
-    if (vacant >= 4) return { level: 'Đỏ', color: 'error' as const, text: 'Ưu tiên sale gấp: gọi khách cũ/đối tác, mở giá last-minute và tìm booking nối ngày.' };
-    if (vacant >= 2) return { level: 'Vàng', color: 'warning' as const, text: 'Đẩy gói 2–3 đêm, ưu đãi check-in gần ngày và lấp các đêm trống lẻ.' };
-    return { level: 'Xanh', color: 'success' as const, text: 'Giữ giá; ưu tiên booking nối ngày hoặc gia hạn để lấp phần trống còn lại.' };
+  const currentRevenue = Number(currentMonthRoom?.bookedNightRevenue ?? 0);
+  const monthlyCost = currentMonthRoom?.monthlyCost;
+  const hasCost = monthlyCost !== null && monthlyCost !== undefined && Number(monthlyCost) > 0;
+  const brokeEven = hasCost && currentRevenue >= Number(monthlyCost);
+  const reachedHalf = total > 0 && occupied / total >= 0.5;
+  const periodIsRisky = kind === 'week' ? vacant >= 2 : rate < 70;
+
+  if (occupied === 0) {
+    return { level: 'Đỏ', color: 'error', action: 'Lấy booking đầu tiên', text: 'Căn chưa có booking trong kỳ; ưu tiên thử nhu cầu/kênh/ưu đãi trước, chưa dùng hoàn vốn làm điều kiện.', review: 'Chạy một thử nghiệm có thời hạn 3 ngày; nếu vẫn 0 booking thì đổi một biến chiến dịch và kiểm lại.' };
   }
-  if (rate < 40) return { level: 'Đỏ', color: 'error' as const, text: 'Cần chiến dịch chủ động: chào khách dài ngày, khách công ty/đối tác và gói 7–30 đêm.' };
-  if (rate < 70) return { level: 'Vàng', color: 'warning' as const, text: 'Đẩy booking 7–14 đêm, liên hệ khách cũ và áp dụng ưu đãi theo thời lượng ở.' };
-  return { level: 'Xanh', color: 'success' as const, text: 'Công suất ổn; bảo vệ giá, chỉ ưu đãi để lấp các khoảng trống lẻ.' };
+  if (!hasCost) {
+    return { level: 'Chờ giá vốn', color: 'default', action: 'Tiếp tục tăng tín hiệu booking', text: 'Căn đã có booking nhưng chưa đủ dữ liệu giá vốn để tối ưu hòa vốn tháng.', review: 'Tiếp tục chiến dịch theo booked-night pace; bổ sung giá vốn trước pha phục hồi giá.' };
+  }
+  if (brokeEven && vacant > 0) {
+    return { level: 'Xanh', color: 'success', action: 'Đề xuất giảm 30–40% cho các đêm trống', text: 'Căn đã hoàn vốn trong tháng hiện tại; ưu tiên lấp đầy để tối đa lợi nhuận.', review: 'Đánh giá lại sau 3 ngày; chỉ áp dụng khi người quản lý duyệt.' };
+  }
+  if (!brokeEven && reachedHalf) {
+    return { level: 'Vàng', color: 'warning', action: 'Dừng giảm sâu, tăng giá dần về giá chuẩn', text: `Đã book ${occupied}/${total} đêm của kỳ (≥50%) nhưng tháng hiện tại còn thiếu ${Math.max(0, Number(monthlyCost) - currentRevenue).toLocaleString('vi-VN')}đ để hoàn vốn.`, review: 'Đánh giá lại sau 3 ngày; ưu tiên giá giúp bù phần còn thiếu.' };
+  }
+  if (!brokeEven && periodIsRisky) {
+    return { level: 'Đỏ', color: 'error', action: 'Đề xuất giảm 30–40% cho các đêm trống', text: `Chưa hoàn vốn tháng hiện tại, còn thiếu ${Math.max(0, Number(monthlyCost) - currentRevenue).toLocaleString('vi-VN')}đ; kỳ này còn ${vacant}/${total} đêm trống.`, review: 'Chạy thử 3 ngày sau khi duyệt; đo số đêm book mới của chính căn này.' };
+  }
+  return { level: 'Vàng', color: 'warning', action: 'Giữ giá, ưu đãi theo gói 3–7 đêm', text: 'Chưa hoàn vốn nhưng mức trống chưa cần giảm sâu; ưu tiên booking dài hơn để bảo vệ doanh thu.', review: 'Đánh giá lại sau 3 ngày hoặc khi có booking/hủy mới.' };
 }
+
 
 function DeltaChip({ value }: { value?: number }) {
   const numeric = Number(value ?? 0);
@@ -377,7 +401,8 @@ export default function DashboardPage() {
   const [reportOpen, setReportOpen] = useState(false);
   const [revenueExpanded, setRevenueExpanded] = useState(false);
   const [occupancyExpanded, setOccupancyExpanded] = useState(false);
-  const [strategyExpanded, setStrategyExpanded] = useState<Record<string, boolean>>({});
+  // AI strategy output must be visible immediately; detailed campaign state is not hidden behind a collapsed panel.
+  const [strategyExpanded, setStrategyExpanded] = useState<Record<string, boolean>>({ thisWeek: true });
   const [sourcePeriod, setSourcePeriod] = useState<SourcePeriodMode>('month');
   const [occupancyPeriod, setOccupancyPeriod] = useState<SourcePeriodMode>('month');
   const { data, isLoading } = useDashboardSummary();
@@ -405,6 +430,7 @@ export default function DashboardPage() {
   const { data: thisWeekStrategyData, isLoading: isThisWeekStrategyLoading } = useDashboardReport({ from: thisWeekStrategy.from, to: thisWeekStrategy.to });
   const { data: nextWeekStrategyData, isLoading: isNextWeekStrategyLoading } = useDashboardReport({ from: nextWeekStrategy.from, to: nextWeekStrategy.to });
   const { data: thisMonthStrategyData, isLoading: isThisMonthStrategyLoading } = useDashboardReport({ from: thisMonthStrategy.from, to: thisMonthStrategy.to });
+  const { data: aiCampaignData } = useAiCeoCampaigns();
   const { data: nextMonthStrategyData, isLoading: isNextMonthStrategyLoading } = useDashboardReport(nextMonthStrategy ? { from: nextMonthStrategy.from, to: nextMonthStrategy.to } : undefined, !!nextMonthStrategy);
   const sourceRange = useMemo(() => {
     const now = dayjs();
@@ -450,6 +476,20 @@ export default function DashboardPage() {
     above70: occupancyRooms.filter((room: any) => Number(room.occupancyRate ?? 0) >= 70).length,
     below50: occupancyRooms.filter((room: any) => Number(room.occupancyRate ?? 0) < 50).length,
   };
+  const aiCampaigns: any[] = aiCampaignData?.data ?? aiCampaignData ?? [];
+  // The API order is not a UI contract. Select the newest assessment explicitly so
+  // a completed fresh run replaces an older campaign for the same room-period.
+  const latestAiCampaign = new Map<string, any>();
+  aiCampaigns.forEach((campaign: any) => {
+    const key = `${campaign.roomId}:${campaign.periodKey}`;
+    const prior = latestAiCampaign.get(key);
+    const candidateAt = new Date(campaign.outputGeneratedAt ?? campaign.createdAt ?? 0).getTime();
+    const priorAt = new Date(prior?.outputGeneratedAt ?? prior?.createdAt ?? 0).getTime();
+    if (!prior || candidateAt >= priorAt) latestAiCampaign.set(key, campaign);
+  });
+  const latestAiCampaignValues = Array.from(latestAiCampaign.values());
+  const currentAiCampaignCount = latestAiCampaignValues.filter((campaign: any) => campaign.periodKey === 'thisWeek').length;
+  const latestAiAssessmentAt = latestAiCampaignValues.reduce((latest: string | null, campaign: any) => { const candidate = campaign.outputGeneratedAt || campaign.createdAt || campaign.updatedAt; return candidate && (!latest || new Date(candidate) > new Date(latest)) ? candidate : latest; }, null);
   const strategyReports = [
     { period: thisWeekStrategy, report: thisWeekStrategyData?.data, loading: isThisWeekStrategyLoading },
     { period: nextWeekStrategy, report: nextWeekStrategyData?.data, loading: isNextWeekStrategyLoading },
@@ -590,13 +630,15 @@ export default function DashboardPage() {
         <Grid item xs={12}>
           <SectionCard
             title="Báo cáo lấp đầy & chiến lược theo căn"
-            sub="Tự cập nhật theo booking hiện có · Tuần bắt đầu Thứ Hai · Tháng này từ ngày 01 · Tháng sau kích hoạt từ ngày 15"
+            sub={`AI đã đánh giá ${currentAiCampaignCount} căn cho Tuần này${latestAiAssessmentAt ? ` · lần gần nhất ${dayjs(latestAiAssessmentAt).format('DD/MM/YYYY HH:mm')}` : ''} · Tự cập nhật theo booking hiện có`}
             icon={<TravelExploreIcon color="primary" fontSize="small" />}
           >
             <Stack spacing={1.25}>
               {strategyReports.map(({ period, report, loading }: any) => {
                 const reportRooms: any[] = [...(report?.occupancy?.byRoom ?? [])].sort((a, b) => Number(a.occupancyRate ?? 0) - Number(b.occupancyRate ?? 0) || Number(a.occupiedNights ?? 0) - Number(b.occupiedNights ?? 0));
-                const redCount = reportRooms.filter((room) => getRoomStrategy(room, period.kind).level === 'Đỏ').length;
+                const currentMonthRooms = thisMonthStrategyData?.data?.occupancy?.byRoom ?? [];
+                const currentMonthByRoom = new Map<string, any>(currentMonthRooms.map((room: any) => [room.roomId, room]));
+                const redCount = reportRooms.filter((room) => getRoomPricingStrategy(room, currentMonthByRoom.get(room.roomId), period.kind).level === 'Đỏ').length;
                 const expanded = Boolean(strategyExpanded[period.key]);
                 return (
                   <Paper key={period.key} variant="outlined" sx={{ overflow: 'hidden', borderRadius: 2 }}>
@@ -606,7 +648,7 @@ export default function DashboardPage() {
                           <Typography variant="subtitle2" fontWeight={800}>{period.title}</Typography>
                           {report && <Chip size="small" color={redCount ? 'error' : 'success'} label={redCount ? `${redCount} căn cần ưu tiên` : 'Không có căn cảnh báo đỏ'} />}
                         </Stack>
-                        <Typography variant="caption" color="text.secondary">{dayjs(period.from).format('DD/MM/YYYY')} → {dayjs(period.to).format('DD/MM/YYYY')} · {period.subtitle}</Typography>
+                        <Typography variant="caption" color="text.secondary">{dayjs(period.from).format('DD/MM/YYYY')} → {dayjs(period.to).format('DD/MM/YYYY')} · {period.subtitle}{period.key === 'thisWeek' && latestAiAssessmentAt ? ` · AI đánh giá ${dayjs(latestAiAssessmentAt).format('DD/MM/YYYY HH:mm')}` : ''}</Typography>
                       </Box>
                       <ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .2s ease' }} />
                     </Box>
@@ -616,20 +658,30 @@ export default function DashboardPage() {
                           <Table size="small" stickyHeader>
                             <TableHead sx={{ backgroundColor: 'var(--bg-primary)', opacity: 1, zIndex: 3, '& .MuiTableCell-root': { backgroundColor: 'var(--bg-primary) !important', opacity: '1 !important', zIndex: 3 } }}>
                               <TableRow sx={{ backgroundColor: 'var(--bg-primary)', opacity: 1 }}>
-                                <TableCell>Căn</TableCell><TableCell>Toà nhà</TableCell><TableCell>Loại phòng</TableCell><TableCell align="right">Đã book / Trống</TableCell><TableCell align="right">Lấp đầy</TableCell><TableCell>Chiến lược</TableCell>
+                                <TableCell>Căn</TableCell><TableCell>Toà nhà</TableCell><TableCell>Loại phòng</TableCell><TableCell align="right">Đã book / Trống</TableCell><TableCell align="right">Lấp đầy</TableCell><TableCell>Hoàn vốn tháng hiện tại</TableCell><TableCell>Đề xuất giá & đánh giá</TableCell>
                               </TableRow>
                             </TableHead>
                             <TableBody>
                               {reportRooms.map((room) => {
-                                const strategy = getRoomStrategy(room, period.kind);
                                 const total = Number(room.totalNightsInPeriod ?? 0);
                                 const occupied = Number(room.occupiedNights ?? 0);
+                                const currentMonthRoom = currentMonthByRoom.get(room.roomId);
+                                const strategy = getRoomPricingStrategy(room, currentMonthRoom, period.kind);
+                                const aiCampaign = latestAiCampaign.get(`${room.roomId}:${period.key}`);
+                                const aiStrategy = aiCampaign?.strategy;
+                                const currentRevenue = Number(currentMonthRoom?.bookedNightRevenue ?? 0);
+                                const monthlyCost = currentMonthRoom?.monthlyCost;
+                                const hasCost = monthlyCost !== null && monthlyCost !== undefined && Number(monthlyCost) > 0;
+                                const difference = hasCost ? currentRevenue - Number(monthlyCost) : null;
                                 return <TableRow key={room.roomId} hover>
                                   <TableCell><Typography fontWeight={800}>{room.roomNumber}</Typography></TableCell>
                                   <TableCell>{room.building}</TableCell><TableCell>{room.roomType}</TableCell>
                                   <TableCell align="right">{occupied}/{Math.max(0, total - occupied)} đêm</TableCell>
                                   <TableCell align="right"><Chip size="small" color={strategy.color} label={`${Number(room.occupancyRate ?? 0).toFixed(1)}%`} /></TableCell>
-                                  <TableCell sx={{ minWidth: 310 }}><Typography variant="caption"><b>{strategy.level}:</b> {strategy.text}</Typography></TableCell>
+                                  <TableCell sx={{ minWidth: 180 }}>
+                                    {hasCost ? <><Typography variant="caption" display="block">DT: {currentRevenue.toLocaleString('vi-VN')}đ</Typography><Typography variant="caption" display="block">GV: {Number(monthlyCost).toLocaleString('vi-VN')}đ</Typography><Typography variant="caption" fontWeight={800} color={difference! >= 0 ? 'success.main' : 'error.main'}>{difference! >= 0 ? `Đã hoàn vốn +${difference!.toLocaleString('vi-VN')}đ` : `Còn thiếu ${Math.abs(difference!).toLocaleString('vi-VN')}đ`}</Typography></> : <Typography variant="caption" color="text.secondary">Chưa nhập giá vốn</Typography>}
+                                  </TableCell>
+                                  <TableCell sx={{ minWidth: 350 }}><Stack spacing={0.4}><Stack direction="row" spacing={0.75} alignItems="center"><Chip size="small" color={strategy.color} label={`Cảnh báo · ${strategy.level}`} /><Typography variant="caption" fontWeight={800}>{strategy.action}</Typography></Stack><Typography variant="caption" color="text.secondary">{strategy.text}</Typography>{aiStrategy && aiCampaign.outputSource === 'AI_MODEL' ? <><Stack direction="row" spacing={0.75} alignItems="center"><Chip size="small" color="info" label={`AI đánh giá · ${aiStrategy.phase ?? aiCampaign.status}`} /><Typography variant="caption" fontWeight={800}>{aiStrategy.objective}</Typography></Stack><Typography variant="caption">{aiStrategy.strategy}</Typography><Typography variant="caption" color="info.main">AI đánh giá lúc {dayjs(aiCampaign.outputGeneratedAt ?? aiCampaign.createdAt).format('DD/MM/YYYY HH:mm')} · đánh giá lại sau {aiCampaign.reviewAfterDays} ngày · {aiCampaign.status}</Typography></> : aiCampaign ? <Typography variant="caption" color="warning.main">AI chưa hoàn tất đánh giá cho căn/kỳ này — hệ thống chỉ chạy lại riêng căn này; nội dung mẫu cũ không được dùng là đánh giá AI.</Typography> : <Typography variant="caption" color="text.secondary">Chưa có đánh giá AI cho căn/kỳ này.</Typography>}<Typography variant="caption" color="text.secondary">Chỉ là đề xuất — chưa thay đổi giá trên OTA.</Typography></Stack></TableCell>
                                 </TableRow>;
                               })}
                             </TableBody>

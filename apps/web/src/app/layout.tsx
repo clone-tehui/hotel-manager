@@ -3,7 +3,7 @@ import { ThemeRegistry } from '@/components/ThemeRegistry';
 import { Providers } from '@/providers/Providers';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://tehui.io.vn'),
+  metadataBase: new URL('https://chiluxe.vn'),
   title: 'Hotel Manager – Hệ thống quản lý đặt phòng',
   description: 'Hệ thống quản lý đặt phòng lưu trú chuyên nghiệp',
   icons: {

@@ -21,6 +21,8 @@ import {
   useApiKeys, useCreateApiKey, useRevokeApiKey,
   useSystemSettings, useUpdateSystemSettings, useUploadSystemImage,
   useWebhooks, useCreateWebhook, useUpdateWebhook, useDeleteWebhook, useTestWebhook,
+  useAiCeoStatus, useAiCeoRuns, useAiCeoRun, useCancelAiCeoRun, useUpdateAiCeoConfig, useRunAiCeo, useAiCeoCampaigns, useTransitionAiCeoCampaign, useMeasureAiCeoCampaign,
+  useOtaConnectors, useConfigureOtaConnector, usePreviewOtaConnector, useExecuteOtaConnector, useOtaConnectorAudits,
 } from '@/hooks/api';
 import { useToast } from '@/providers/ToastProvider';
 import { useAppearance } from '@/providers/AppThemeProvider';
@@ -586,6 +588,95 @@ function ApiKeysTab() {
   );
 }
 
+function AiCeoTab() {
+  const { toast } = useToast();
+  const { data: statusData, isLoading } = useAiCeoStatus();
+  const { data: runsData } = useAiCeoRuns();
+  const updateMut = useUpdateAiCeoConfig();
+  const runMut = useRunAiCeo();
+  const cancelMut = useCancelAiCeoRun();
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const { data: selectedRunData, isLoading: isRunLoading } = useAiCeoRun(selectedRunId || undefined);
+  const { data: campaignsData } = useAiCeoCampaigns();
+  const transitionMut = useTransitionAiCeoCampaign();
+  const measureMut = useMeasureAiCeoCampaign();
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState<string>('ALL');
+  const [decisionTarget, setDecisionTarget] = useState<{ id: string; action: 'APPROVED' | 'REJECTED' | 'CANCELLED' } | null>(null);
+  const [decisionReason, setDecisionReason] = useState('');
+  const status = statusData?.data ?? statusData ?? {};
+  const runs: any[] = runsData?.data ?? runsData ?? [];
+  const [form, setForm] = useState({ model: '', apiKey: '', enabled: false, maxTokens: 6000, runControls: { maxRunsPerDay: 4, maxBatchesPerRun: 8, maxConcurrentRuns: 1, failureThreshold: 3, cooldownMs: 900000 } });
+  useEffect(() => { if (status?.model) setForm((current) => ({ ...current, model: status.model, enabled: Boolean(status.enabled), maxTokens: Number(status.maxTokens || 6000), runControls: status.runControls ?? current.runControls })); }, [status?.model, status?.enabled, status?.maxTokens, status?.runControls]);
+  const save = async () => { try { await updateMut.mutateAsync(form); setForm((current) => ({ ...current, apiKey: '' })); toast('Đã lưu cấu hình AI CEO', 'success'); } catch (e: any) { toast(e?.message ?? 'Không lưu được cấu hình AI', 'error'); } };
+  const run = async () => { try { await runMut.mutateAsync(undefined); toast('AI CEO đã phân tích và tạo chiến dịch đề xuất', 'success'); } catch (e: any) { toast(e?.message ?? 'AI CEO chưa chạy được', 'error'); } };
+  const selectedRun: any = selectedRunData?.data ?? selectedRunData ?? null;
+  const isTerminal = (status?: string) => ['COMPLETED', 'FAILED', 'CANCELLED', 'PARTIAL'].includes(status || '');
+  const requestCancel = async (id: string) => { try { await cancelMut.mutateAsync(id); toast('Đã yêu cầu dừng run an toàn; batch đang chạy sẽ kết thúc theo policy.', 'success'); } catch (e: any) { toast(e?.message ?? 'Không thể yêu cầu dừng run', 'error'); } };
+  const allCampaigns: any[] = campaignsData?.data ?? campaignsData ?? [];
+  const campaigns = campaignStatusFilter === 'ALL' ? allCampaigns : allCampaigns.filter((c: any) => c.status === campaignStatusFilter);
+  const counts = allCampaigns.reduce((acc: Record<string, number>, c: any) => { acc[c.status] = (acc[c.status] || 0) + 1; return acc; }, {});
+  const openDecision = (id: string, action: 'APPROVED' | 'REJECTED' | 'CANCELLED') => { setDecisionTarget({ id, action }); setDecisionReason(''); };
+  const submitDecision = async () => { if (!decisionTarget || !decisionReason.trim()) return; try { await transitionMut.mutateAsync({ id: decisionTarget.id, status: decisionTarget.action, reason: decisionReason.trim() }); toast(`Đã chuyển trạng thái chiến dịch sang ${decisionTarget.action}`, 'success'); setDecisionTarget(null); setDecisionReason(''); } catch (e: any) { toast(e?.message ?? 'Không thể cập nhật trạng thái chiến dịch', 'error'); } };
+  const requestMeasure = async (id: string) => { try { const r = await measureMut.mutateAsync(id); const m = r?.data?.measurement ?? r?.measurement; toast(m?.outcome ? `Đã đo lường: ${m.outcome}` : 'Đã ghi nhận phép đo', 'success'); } catch (e: any) { toast(e?.message ?? 'Không thể đo lường chiến dịch', 'error'); } };
+  if (isLoading) return <Box sx={{ py: 5, textAlign: 'center' }}><CircularProgress /></Box>;
+  return <Stack spacing={3}>
+    <Alert severity="info">AI CEO hiện ở chế độ <b>chỉ đọc và đề xuất</b>. Agent không có tool tự đổi giá OTA. Mọi chiến dịch đều cần quản lý duyệt.</Alert>
+    <Paper sx={{ p: { xs: 3, md: 4 }, borderRadius: '28px' }}><Stack spacing={2.5}>
+      <SectionHeading title="Model & tay chân của AI CEO" subtitle="OpenRouter model + memory PostgreSQL + công cụ đọc dữ liệu ChiHome. API key được mã hoá ở backend và không bao giờ hiển thị lại." />
+      <TextField label="OpenRouter model" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="openai/gpt-4.1-mini" />
+      <TextField label={status.configured ? 'OpenRouter API key (đã cấu hình — chỉ nhập nếu muốn thay)' : 'OpenRouter API key'} type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-or-v1-..." helperText="Secret không được trả về trình duyệt sau khi lưu." />
+      <TextField label="Giới hạn output token" type="number" inputProps={{ min: 1000, max: 12000 }} value={form.maxTokens} onChange={(e) => setForm({ ...form, maxTokens: Number(e.target.value) })} />
+      <FormControlLabel control={<Switch checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />} label="Bật AI CEO" />
+      <Alert severity="warning">Chi phí USD chỉ được ghi nhận sau khi OpenRouter trả <code>usage.cost</code>. Hệ thống không tự ước tính tiền trước khi chạy.</Alert>
+      <Typography variant="subtitle2">Giới hạn vận hành (không phải giới hạn tiền)</Typography>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}><TextField label="Số run tối đa / ngày" type="number" inputProps={{ min: 1, max: 24 }} value={form.runControls.maxRunsPerDay} onChange={(e) => setForm({ ...form, runControls: { ...form.runControls, maxRunsPerDay: Number(e.target.value) } })} fullWidth /><TextField label="Batch tối đa / run" type="number" inputProps={{ min: 1, max: 100 }} value={form.runControls.maxBatchesPerRun} onChange={(e) => setForm({ ...form, runControls: { ...form.runControls, maxBatchesPerRun: Number(e.target.value) } })} fullWidth /><TextField label="Run đồng thời" type="number" inputProps={{ min: 1, max: 5 }} value={form.runControls.maxConcurrentRuns} onChange={(e) => setForm({ ...form, runControls: { ...form.runControls, maxConcurrentRuns: Number(e.target.value) } })} fullWidth /></Stack>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}><TextField label="Lỗi liên tiếp trước khi tạm dừng provider" type="number" inputProps={{ min: 1, max: 10 }} value={form.runControls.failureThreshold} onChange={(e) => setForm({ ...form, runControls: { ...form.runControls, failureThreshold: Number(e.target.value) } })} fullWidth /><TextField label="Thời gian tạm dừng provider (phút)" type="number" inputProps={{ min: 1, max: 1440 }} value={Math.round(form.runControls.cooldownMs / 60000)} onChange={(e) => setForm({ ...form, runControls: { ...form.runControls, cooldownMs: Number(e.target.value) * 60000 } })} fullWidth /></Stack>
+      <Typography variant="caption" color="text.secondary">Trạng thái provider: {status.providerCircuit?.openedUntil ? `đang tạm dừng tới ${dayjs(status.providerCircuit.openedUntil).format('DD/MM HH:mm')}` : `sẵn sàng · lỗi liên tiếp: ${status.providerCircuit?.failures ?? 0}`}. Chi phí thực tế sẽ lấy từ OpenRouter sau từng request nếu provider trả về.</Typography>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}><Button variant="contained" onClick={save} disabled={updateMut.isPending}>{updateMut.isPending ? 'Đang lưu…' : 'Lưu cấu hình'}</Button><Button variant="outlined" startIcon={<PlayArrowIcon />} onClick={run} disabled={!status.configured || !status.enabled || runMut.isPending}>{runMut.isPending ? 'AI đang đọc dữ liệu…' : 'Chạy phân tích ngay'}</Button></Stack>
+      <Stack direction="row" gap={1} flexWrap="wrap"><Chip label={status.configured ? 'OpenRouter: đã cấu hình' : 'OpenRouter: chưa có key'} color={status.configured ? 'success' : 'warning'} /><Chip label={`Memory: ${status.memoryCount ?? 0}`} /><Chip label={`Chiến dịch: ${status.campaignCount ?? 0}`} /><Chip label="Advisory only" color="info" /></Stack>
+      <Typography variant="caption" color="text.secondary">Tools: {(status.tools ?? []).join(' · ') || '—'}</Typography>
+    </Stack></Paper>
+    <Paper sx={{ p: 3, borderRadius: '28px' }}><SectionHeading title="Vận hành & lịch sử lần chạy" subtitle="Theo dõi phase, tiến độ, batch và lỗi; yêu cầu dừng không thay đổi booking/OTA." /><Stack spacing={1.25} sx={{ mt: 2 }}>{runs.length ? runs.map((item: any) => <Box key={item.id} sx={{ p: 1.5, border: '1px solid', borderColor: selectedRunId === item.id ? 'primary.main' : 'divider', borderRadius: 2 }}><Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}><Box><Typography variant="body2" fontWeight={700}>{item.model}</Typography><Typography variant="caption" color="text.secondary">{dayjs(item.startedAt).format('DD/MM/YYYY HH:mm')} · {(item.periodKeys ?? []).join(', ')}</Typography></Box><Stack direction="row" gap={1} alignItems="center"><Chip size="small" label={item.status} color={item.status === 'COMPLETED' ? 'success' : item.status === 'FAILED' ? 'error' : 'warning'} /><Button size="small" onClick={() => setSelectedRunId(item.id)}>Chi tiết</Button>{!isTerminal(item.status) && <Button size="small" color="warning" onClick={() => requestCancel(item.id)} disabled={cancelMut.isPending}>Dừng</Button>}</Stack></Stack><Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}><Chip size="small" variant="outlined" label={`Phase: ${item.currentPhase ?? '—'}`} /><Chip size="small" variant="outlined" label={`Tiến độ: ${item.progress ?? 0}%`} /><Chip size="small" variant="outlined" label={`Batch: ${item.completedBatches ?? 0}/${item.totalBatches ?? 0} xong · ${item.failedBatches ?? 0} lỗi`} /></Stack>{item.error && <Typography variant="caption" color="error.main" display="block" sx={{ mt: 0.75 }}>{item.error}</Typography>}</Box>) : <Typography variant="body2" color="text.secondary">Chưa có lần phân tích nào.</Typography>}</Stack></Paper>
+    <Dialog open={!!selectedRunId} onClose={() => setSelectedRunId(null)} fullWidth maxWidth="md"><DialogTitle>Chi tiết run AI CEO</DialogTitle><DialogContent dividers>{isRunLoading || !selectedRun ? <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress /></Box> : <Stack spacing={2}><Stack direction="row" gap={1} flexWrap="wrap"><Chip label={selectedRun.status} color={selectedRun.status === 'COMPLETED' ? 'success' : selectedRun.status === 'FAILED' ? 'error' : 'warning'} /><Chip label={`Phase: ${selectedRun.currentPhase ?? '—'}`} /><Chip label={`Tiến độ: ${selectedRun.progress ?? 0}%`} /><Chip label={`Batches: ${selectedRun.completedBatches ?? 0}/${selectedRun.totalBatches ?? 0} · lỗi ${selectedRun.failedBatches ?? 0}`} /></Stack>{selectedRun.error && <Alert severity="error">{selectedRun.error}</Alert>}<Typography variant="subtitle2">Các batch</Typography><Stack spacing={1}>{(selectedRun.batches ?? []).map((batch: any) => <Paper key={batch.id} variant="outlined" sx={{ p: 1.25 }}><Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}><Typography variant="body2" fontWeight={700}>Batch {batch.sequence} · {batch.roomIds?.length ?? 0} căn</Typography><Chip size="small" label={batch.status} color={batch.status === 'COMPLETED' ? 'success' : batch.status === 'FAILED' ? 'error' : 'warning'} /></Stack><Typography variant="caption" color="text.secondary">Retry: {batch.retryCount ?? 0} · input {batch.promptTokens ?? '—'} / output {batch.completionTokens ?? '—'} tokens</Typography>{batch.error && <Typography variant="caption" color="error.main" display="block">{batch.error}</Typography>}</Paper>)}</Stack></Stack>}</DialogContent><DialogActions><Button onClick={() => setSelectedRunId(null)}>Đóng</Button>{selectedRun && !isTerminal(selectedRun.status) && <Button color="warning" onClick={() => requestCancel(selectedRun.id)} disabled={cancelMut.isPending}>Yêu cầu dừng</Button>}</DialogActions></Dialog>
+    <Paper sx={{ p: 3, borderRadius: '28px' }}><SectionHeading title="Chiến dịch đề xuất & đo lường" subtitle="Duyệt / từ chối / huỷ chiến dịch; chỉ đo lường sau khi kỳ kết thúc. Mọi thay đổi giá/OTA phải do người duyệt thực hiện bên ngoài AI." /><Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>{['ALL', 'PROPOSED', 'APPROVED', 'REJECTED', 'RUNNING', 'REVIEW_DUE', 'COMPLETED', 'MEASURED'].map((s) => <Chip key={s} label={`${s} (${s === 'ALL' ? allCampaigns.length : counts[s] || 0})`} color={campaignStatusFilter === s ? 'primary' : 'default'} variant={campaignStatusFilter === s ? 'filled' : 'outlined'} onClick={() => setCampaignStatusFilter(s)} sx={{ cursor: 'pointer' }} />)}</Stack><Stack spacing={1.25} sx={{ mt: 2 }}>{campaigns.length ? campaigns.map((c: any) => { const allowed = ['PROPOSED', 'APPROVED', 'RUNNING', 'REVIEW_DUE']; const canMeasure = ['APPROVED', 'RUNNING', 'REVIEW_DUE'].includes(c.status); return <Paper key={c.id} variant="outlined" sx={{ p: 1.5 }}><Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}><Box><Typography variant="body2" fontWeight={700}>Căn {c.roomNumber} · {c.periodKey}</Typography><Typography variant="caption" color="text.secondary">{dayjs(c.periodFrom).format('DD/MM/YYYY')} → {dayjs(c.periodTo).format('DD/MM/YYYY')} · Review due {dayjs(c.reviewDueAt).format('DD/MM HH:mm')}</Typography><Typography variant="caption" display="block">Mục tiêu: {c.objective}</Typography></Box><Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><Chip size="small" label={c.status} color={['APPROVED', 'MEASURED'].includes(c.status) ? 'success' : ['REJECTED', 'CANCELLED'].includes(c.status) ? 'error' : 'warning'} />{c.measurementOutcome && <Chip size="small" label={`Đo: ${c.measurementOutcome}`} variant="outlined" />}{c.status === 'PROPOSED' && <Button size="small" color="success" variant="contained" onClick={() => openDecision(c.id, 'APPROVED')} disabled={transitionMut.isPending}>Duyệt</Button>}{c.status === 'PROPOSED' && <Button size="small" color="error" onClick={() => openDecision(c.id, 'REJECTED')} disabled={transitionMut.isPending}>Từ chối</Button>}{allowed.includes(c.status) && !['REJECTED', 'CANCELLED', 'COMPLETED', 'MEASURED'].includes(c.status) && <Button size="small" color="warning" onClick={() => openDecision(c.id, 'CANCELLED')} disabled={transitionMut.isPending}>Huỷ</Button>}{canMeasure && <Button size="small" variant="outlined" onClick={() => requestMeasure(c.id)} disabled={measureMut.isPending}>Đo lường</Button>}</Stack></Stack>{c.strategy?.assessment && <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>Đánh giá: {c.strategy.assessment}</Typography>}{c.measurementStatus && <Typography variant="caption" display="block" color={c.measurementStatus === 'MEASURED' ? 'success.main' : 'warning.main'}>Trạng thái đo: {c.measurementStatus}{c.measurementOutcome ? ` · ${c.measurementOutcome}` : ''}</Typography>}</Paper>; }) : <Typography variant="body2" color="text.secondary">Chưa có chiến dịch nào trong bộ lọc này.</Typography>}</Stack></Paper>
+    <Dialog open={!!decisionTarget} onClose={() => setDecisionTarget(null)} maxWidth="sm" fullWidth><DialogTitle>{decisionTarget?.action === 'APPROVED' ? 'Duyệt chiến dịch' : decisionTarget?.action === 'REJECTED' ? 'Từ chối chiến dịch' : 'Huỷ chiến dịch'}</DialogTitle><DialogContent><Typography variant="body2" color="text.secondary" sx={{ pb: 1.5 }}>Hành động này sẽ ghi nhận lý do vào lịch sử chuyển trạng thái. AI không tự động thay đổi giá/OTA.</Typography><TextField label="Lý do (bắt buộc)" value={decisionReason} onChange={(e) => setDecisionReason(e.target.value)} fullWidth multiline minRows={2} /></DialogContent><DialogActions><Button onClick={() => setDecisionTarget(null)}>Đóng</Button><Button variant="contained" color={decisionTarget?.action === 'REJECTED' ? 'error' : decisionTarget?.action === 'CANCELLED' ? 'warning' : 'success'} disabled={!decisionReason.trim() || transitionMut.isPending} onClick={submitDecision}>{transitionMut.isPending ? 'Đang lưu…' : 'Xác nhận'}</Button></DialogActions></Dialog>
+  </Stack>;
+}
+
+
+function OtaConnectorsTab() {
+  const { toast } = useToast();
+  const { data, isLoading } = useOtaConnectors();
+  const configureMut = useConfigureOtaConnector();
+  const previewMut = usePreviewOtaConnector();
+  const executeMut = useExecuteOtaConnector();
+  const [credentials, setCredentials] = useState({ partnerId: '', clientId: '', clientSecret: '' });
+  const [enabled, setEnabled] = useState(false);
+  const [auditId, setAuditId] = useState<string | null>(null);
+  const { data: auditData } = useOtaConnectorAudits(auditId || undefined);
+  const rows: any[] = data?.data ?? data ?? [];
+  const airbnb = rows.find((row) => row.channel === 'AIRBNB');
+  const save = async () => { try { await configureMut.mutateAsync({ channel: 'AIRBNB', credentials, enabled }); setCredentials({ partnerId: '', clientId: '', clientSecret: '' }); toast('Đã lưu placeholder xác thực Airbnb dưới dạng mã hoá.', 'success'); } catch (e: any) { toast(e?.message ?? 'Không thể lưu cấu hình OTA', 'error'); } };
+  const preview = async () => { if (!airbnb) return; try { const result: any = await previewMut.mutateAsync(airbnb.id); toast(result?.reason ?? 'Preview cục bộ hoàn tất; không gửi request ra OTA.', 'info'); } catch (e: any) { toast(e?.message ?? 'Không preview được connector', 'error'); } };
+  const execute = async () => { if (!airbnb) return; try { await executeMut.mutateAsync(airbnb.id); } catch (e: any) { toast(e?.message ?? 'Chưa có adapter OTA để thực thi', 'warning'); } };
+  if (isLoading) return <Box sx={{ py: 5, textAlign: 'center' }}><CircularProgress /></Box>;
+  return <Stack spacing={3}>
+    <Alert severity="warning"><b>OTA framework an toàn:</b> AI CEO không có quyền chạy connector. Bản hiện tại chưa có adapter Airbnb, nên mọi preview chỉ kiểm tra local và không hề gọi OTA/đổi booking/giá.</Alert>
+    <Paper sx={{ p: { xs: 3, md: 4 }, borderRadius: '28px' }}><Stack spacing={2.25}>
+      <SectionHeading title="Airbnb — Partner connector" subtitle="Chỉ nhập credential do Airbnb/partner cấp. Giá trị được mã hoá ở backend và không bao giờ hiện lại trên trình duyệt." />
+      <TextField label="Partner ID" value={credentials.partnerId} onChange={(e) => setCredentials({ ...credentials, partnerId: e.target.value })} autoComplete="off" />
+      <TextField label="Client ID" value={credentials.clientId} onChange={(e) => setCredentials({ ...credentials, clientId: e.target.value })} autoComplete="off" />
+      <TextField label="Client secret" type="password" value={credentials.clientSecret} onChange={(e) => setCredentials({ ...credentials, clientSecret: e.target.value })} autoComplete="new-password" helperText="Không dùng API key cá nhân; chỉ dùng credential đối tác đã được phê duyệt." />
+      <FormControlLabel control={<Switch checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />} label="Đánh dấu connector sẵn sàng khi adapter được phê duyệt" />
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}><Button variant="contained" onClick={save} disabled={configureMut.isPending || !credentials.partnerId || !credentials.clientId || !credentials.clientSecret}>{configureMut.isPending ? 'Đang lưu…' : 'Lưu credential mã hoá'}</Button>{airbnb && <Button variant="outlined" onClick={preview} disabled={previewMut.isPending}>Local preview (không gọi OTA)</Button>}{airbnb && <Button color="warning" variant="contained" onClick={execute} disabled={executeMut.isPending}>Thực thi chiến lược</Button>}</Stack>
+      {airbnb && <Stack direction="row" gap={1} flexWrap="wrap"><Chip label={airbnb.configured ? 'Credential: đã cấu hình' : 'Credential: chưa cấu hình'} color={airbnb.configured ? 'success' : 'warning'} /><Chip label={`Adapter: NONE`} color="warning" /><Chip label="External request: blocked" color="error" /></Stack>}
+    </Stack></Paper>
+    <Paper sx={{ p: 3, borderRadius: '28px' }}><SectionHeading title="Audit connector" subtitle="Lưu vết configure/preview/block theo actor; không lưu giá trị credential." />
+      <Stack spacing={1.25} sx={{ mt: 2 }}>{airbnb ? <><Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><Chip label="AIRBNB" color="primary" /><Typography variant="body2">{airbnb.displayName} · {airbnb.configured ? 'đã có placeholder' : 'chưa cấu hình'} · adapter NONE</Typography><Button size="small" onClick={() => setAuditId(airbnb.id)}>Xem audit</Button></Stack>{auditId && <Stack spacing={1}>{((auditData?.data ?? auditData ?? []) as any[]).map((a) => <Paper key={a.id} variant="outlined" sx={{ p: 1.25 }}><Typography variant="body2" fontWeight={700}>{a.action}</Typography><Typography variant="caption" color="text.secondary">{dayjs(a.createdAt).format('DD/MM/YYYY HH:mm:ss')} · external request: {String(a.result?.externalRequest ?? false)}</Typography></Paper>)}</Stack>}</> : <Typography variant="body2" color="text.secondary">Chưa có connector nào. Lưu placeholder Airbnb để khởi tạo audit.</Typography>}</Stack>
+    </Paper>
+  </Stack>;
+}
+
 export default function SettingsPage() {
   const [tab, setTab] = useState(0);
 
@@ -602,11 +693,15 @@ export default function SettingsPage() {
             <Tab label="Thông tin chung" />
             <Tab label="Webhook / n8n" />
             <Tab label="API Keys" />
+            <Tab label="AI CEO" />
+            <Tab label="OTA Connectors" />
           </Tabs>
           <Box sx={{ p: { xs: 2, md: 4 } }}>
             <TabPanel value={tab} index={0}><GeneralTab /></TabPanel>
             <TabPanel value={tab} index={1}><WebhooksTab /></TabPanel>
             <TabPanel value={tab} index={2}><ApiKeysTab /></TabPanel>
+            <TabPanel value={tab} index={3}><AiCeoTab /></TabPanel>
+            <TabPanel value={tab} index={4}><OtaConnectorsTab /></TabPanel>
           </Box>
         </Paper>
       </Box>

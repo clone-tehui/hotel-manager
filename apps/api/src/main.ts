@@ -20,15 +20,41 @@ async function bootstrap() {
   }
   app.useStaticAssets(uploadsDir, { prefix: '/uploads/' });
 
+  // Baseline browser/API hardening. The Cloudflare tunnel terminates public TLS;
+  // these headers also protect direct local access without changing route contracts.
+  app.disable('x-powered-by');
+  app.use((req: any, res: any, next: () => void) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
+
   app.enableCors({
     origin: [
       'http://localhost:3000',
-      'https://tehui.io.vn',
-      'https://chihomeoder.tehui.io.vn',
+      'https://chiluxe.vn',
       'https://menu.chiluxe.vn',
       process.env.FRONTEND_URL,
     ].filter(Boolean) as string[],
     credentials: true,
+  });
+
+  // Rate-limit only AI CEO operations so existing bridge/webhook traffic is unaffected.
+  const aiCeoHits = new Map<string, { count: number; resetAt: number }>();
+  app.use('/api/ai-ceo-agent', (req: any, res: any, next: () => void) => {
+    const now = Date.now();
+    const key = String(req.user?.id || req.ip || 'unknown');
+    const current = aiCeoHits.get(key);
+    const state = !current || now >= current.resetAt ? { count: 0, resetAt: now + 60_000 } : current;
+    state.count += 1;
+    aiCeoHits.set(key, state);
+    if (state.count > 60) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((state.resetAt - now) / 1000))));
+      return res.status(429).json({ ok: false, error: 'Too many AI CEO requests' });
+    }
+    next();
   });
 
   // Global response format: { ok, data, meta }

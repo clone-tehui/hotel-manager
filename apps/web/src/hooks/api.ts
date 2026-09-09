@@ -352,3 +352,21 @@ export const useDeleteWebhook = () => {
 
 export const useTestWebhook = () =>
   useMutation({ mutationFn: (id: string) => api.post(`/webhooks/${id}/test`) });
+
+// ─── ChiHome AI CEO Agent ────────────────────────────────────────────────────
+export const useAiCeoStatus = () => useQuery({ queryKey: ['ai-ceo-status'], queryFn: () => api.get('/ai-ceo-agent/status'), staleTime: 30_000 });
+export const useAiCeoRuns = () => useQuery({ queryKey: ['ai-ceo-runs'], queryFn: () => api.get('/ai-ceo-agent/runs', { limit: 10 }), staleTime: 15_000 });
+export const useAiCeoCampaigns = () => useQuery({ queryKey: ['ai-ceo-campaigns'], queryFn: () => api.get('/ai-ceo-agent/campaigns'), staleTime: 0, refetchInterval: 15_000, refetchOnWindowFocus: true });
+export const useTransitionAiCeoCampaign = () => { const qc = useQueryClient(); return useMutation({ mutationFn: ({ id, status, reason }: { id: string; status: string; reason?: string }) => api.patch(`/ai-ceo-agent/campaigns/${id}/status`, { status, reason }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['ai-ceo-campaigns'] }); qc.invalidateQueries({ queryKey: ['ai-ceo-status'] }); } }); };
+export const useMeasureAiCeoCampaign = () => { const qc = useQueryClient(); return useMutation({ mutationFn: (id: string) => api.post(`/ai-ceo-agent/campaigns/${id}/measure`), onSuccess: () => { qc.invalidateQueries({ queryKey: ['ai-ceo-campaigns'] }); } }); };
+export const useUpdateAiCeoConfig = () => { const qc = useQueryClient(); return useMutation({ mutationFn: (body: any) => api.patch('/ai-ceo-agent/config', body), onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-ceo-status'] }) }); };
+export const useRunAiCeo = () => { const qc = useQueryClient(); return useMutation({ mutationFn: (periodKeys?: string[]) => api.post('/ai-ceo-agent/run', { periodKeys }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['ai-ceo-status'] }); qc.invalidateQueries({ queryKey: ['ai-ceo-runs'] }); qc.invalidateQueries({ queryKey: ['ai-ceo-campaigns'] }); } }); };
+export const useAiCeoRun = (id?: string) => useQuery({ queryKey: ['ai-ceo-run', id], queryFn: () => api.get(`/ai-ceo-agent/runs/${id}`), enabled: !!id, refetchInterval: 5_000 });
+export const useCancelAiCeoRun = () => { const qc = useQueryClient(); return useMutation({ mutationFn: (id: string) => api.post(`/ai-ceo-agent/runs/${id}/cancel`), onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['ai-ceo-runs'] }); qc.invalidateQueries({ queryKey: ['ai-ceo-run', id] }); } }); };
+
+// ─── OTA connectors (human-admin only; framework has no external OTA adapter) ───
+export const useOtaConnectors = () => useQuery({ queryKey: ['ota-connectors'], queryFn: () => api.get('/ota-connectors'), staleTime: 15_000 });
+export const useConfigureOtaConnector = () => { const qc = useQueryClient(); return useMutation({ mutationFn: ({ channel, ...body }: any) => api.patch(`/ota-connectors/${channel}`, body), onSuccess: () => qc.invalidateQueries({ queryKey: ['ota-connectors'] }) }); };
+export const usePreviewOtaConnector = () => { const qc = useQueryClient(); return useMutation({ mutationFn: (id: string) => api.post(`/ota-connectors/${id}/preview`), onSuccess: () => qc.invalidateQueries({ queryKey: ['ota-connectors'] }) }); };
+export const useExecuteOtaConnector = () => { const qc = useQueryClient(); return useMutation({ mutationFn: (id: string) => api.post(`/ota-connectors/${id}/execute`), onSettled: () => { qc.invalidateQueries({ queryKey: ['ota-connectors'] }); qc.invalidateQueries({ queryKey: ['ota-connector-audits'] }); } }); };
+export const useOtaConnectorAudits = (id?: string) => useQuery({ queryKey: ['ota-connector-audits', id], queryFn: () => api.get(`/ota-connectors/${id}/audits`), enabled: !!id, staleTime: 5_000 });

@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const PUBLIC_ORDER_HOSTS = new Set([
-  'chihomeoder.tehui.io.vn',
-  'chihomeorder.tehui.io.vn',
   'menu.chiluxe.vn',
 ]);
 
