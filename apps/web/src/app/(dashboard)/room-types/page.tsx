@@ -8,8 +8,9 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CheckIcon from '@mui/icons-material/Check';
-import { useRoomTypes, useCreateRoomType, useUpdateRoomType } from '@/hooks/api';
+import { useRoomTypes, useCreateRoomType, useUpdateRoomType, useDeleteRoomType } from '@/hooks/api';
 import { LoadingState, EmptyState } from '@/components/common/States';
 import { useToast } from '@/providers/ToastProvider';
 import CategoryIcon from '@mui/icons-material/Category';
@@ -24,9 +25,11 @@ export default function RoomTypesPage() {
 
   const create = useCreateRoomType();
   const update = useUpdateRoomType();
+  const remove = useDeleteRoomType();
   const [formOpen, setFormOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<any>(null);
   const [form, setForm] = useState(EMPTY);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
 
   const set = (k: string) => (e: any) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -52,6 +55,15 @@ export default function RoomTypesPage() {
       toast(editTarget ? 'Cập nhật thành công' : 'Tạo loại phòng thành công');
       setFormOpen(false);
     } catch (e: any) { toast(e?.message ?? 'Lỗi', 'error'); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await remove.mutateAsync(deleteTarget.id);
+      toast(`Đã xóa loại phòng ${deleteTarget.name}`);
+      setDeleteTarget(null);
+    } catch (e: any) { toast(e?.message ?? 'Không thể xóa loại phòng', 'error'); }
   };
 
   return (
@@ -98,6 +110,9 @@ export default function RoomTypesPage() {
                   <TableCell><Chip label={rt._count?.rooms ?? 0} size="small" /></TableCell>
                   <TableCell align="right">
                     <IconButton size="small" onClick={() => openEdit(rt)}><EditIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" color="error" onClick={() => setDeleteTarget(rt)} title="Xóa loại phòng">
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
                   </TableCell>
                 </TableRow>
               ))}
@@ -123,6 +138,19 @@ export default function RoomTypesPage() {
         <DialogActions>
           <Button onClick={() => setFormOpen(false)}>Huỷ</Button>
           <Button variant="contained" onClick={handleSave} disabled={create.isPending || update.isPending}>Lưu</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Xóa loại phòng?</DialogTitle>
+        <DialogContent dividers>
+          <Typography>
+            Xóa <strong>{deleteTarget?.name}</strong>? Chỉ có thể xóa khi không còn căn nào sử dụng loại này.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Huỷ</Button>
+          <Button color="error" variant="contained" onClick={handleDelete} disabled={remove.isPending}>Xóa</Button>
         </DialogActions>
       </Dialog>
     </Box>

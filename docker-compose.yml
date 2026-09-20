@@ -1,100 +1,120 @@
-# Hotel Management System – Docker Compose
-# NOTE: Uses isolated network "hotel_network" – does NOT touch any other containers (e.g. n8n)
+name: ${COMPOSE_PROJECT_NAME:-hotel_manager}
 
-networks:
-  hotel_network:
-    driver: bridge
-
-volumes:
-  hotel_postgres_data:
-  hotel_uploads_data:
+x-api-environment: &api-environment
+  NODE_ENV: production
+  API_PORT: 3001
+  FRONTEND_URL: ${FRONTEND_URL:-}
+  LEGACY_FRONTEND_URL: ${LEGACY_FRONTEND_URL:-}
+  DATABASE_URL: ${DATABASE_URL:-postgresql://hotel_app:hotel-local-password@db:5432/hotel_management?schema=public}
+  JWT_SECRET: ${JWT_SECRET:-local-only-secret-change-before-public-deployment-please}
+  JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  AI_CEO_WORKER_ENABLED: ${AI_CEO_WORKER_ENABLED:-false}
+  ZALO_USER_SERVER_BASE_URL: ${ZALO_USER_SERVER_BASE_URL:-}
+  CHIHOME_BOOKING_BRIDGE_SECRET: ${CHIHOME_BOOKING_BRIDGE_SECRET:-}
+  BOOKING_AUTOMATION_WEBHOOK_URL: ${BOOKING_AUTOMATION_WEBHOOK_URL:-}
+  BOOKING_AUTOMATION_WEBHOOK_SECRET: ${BOOKING_AUTOMATION_WEBHOOK_SECRET:-}
+  ADDON_ORDER_PUBLIC_BASE_URL: ${ADDON_ORDER_PUBLIC_BASE_URL:-http://localhost:3000}
+  ADDON_ORDER_VIETQR_BANK_ID: ${ADDON_ORDER_VIETQR_BANK_ID:-}
+  ADDON_ORDER_VIETQR_ACCOUNT_NO: ${ADDON_ORDER_VIETQR_ACCOUNT_NO:-}
+  ADDON_ORDER_VIETQR_ACCOUNT_NAME: ${ADDON_ORDER_VIETQR_ACCOUNT_NAME:-}
+  SEPAY_WEBHOOK_SECRET: ${SEPAY_WEBHOOK_SECRET:-}
 
 services:
-  # ── PostgreSQL ──────────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
-    container_name: hotel_db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: "${POSTGRES_USER}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "${POSTGRES_DB}"
-    ports:
-      - '127.0.0.1:5433:5432'   # loopback-only; Docker network remains available to services
+      POSTGRES_DB: ${POSTGRES_DB:-hotel_management}
+      POSTGRES_USER: ${POSTGRES_USER:-hotel_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hotel-local-password}
     volumes:
-      - hotel_postgres_data:/var/lib/postgresql/data
-    networks:
-      - hotel_network
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U hotel_user -d hotel_db']
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
+    networks: [app_network]
 
-  # ── Backend API (NestJS) ────────────────────────────────────────────────────
-  api:
+  migrate:
+    image: hotel-manager-api:local
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: hotel_api
-    restart: unless-stopped
+    environment: *api-environment
+    command: ["./node_modules/.bin/prisma", "db", "push", "--schema", "prisma/schema.prisma"]
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      DATABASE_URL: "${DATABASE_URL}"
-      JWT_SECRET: "${JWT_SECRET}"
-      JWT_EXPIRES_IN: "${JWT_EXPIRES_IN:-7d}"
-      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
-      AI_CEO_WORKER_ENABLED: "${AI_CEO_WORKER_ENABLED:-false}"
-      API_PORT: 3001
-      NODE_ENV: production
-      ZALO_USER_SERVER_BASE_URL: "${ZALO_USER_SERVER_BASE_URL:-https://zl.tehui.io.vn}"
-      CHIHOME_BOOKING_BRIDGE_SECRET: "${CHIHOME_BOOKING_BRIDGE_SECRET}"
-      BOOKING_AUTOMATION_WEBHOOK_URL: "${BOOKING_AUTOMATION_WEBHOOK_URL:-}"
-      BOOKING_AUTOMATION_WEBHOOK_SECRET: "${BOOKING_AUTOMATION_WEBHOOK_SECRET}"
-      ADDON_ORDER_PUBLIC_BASE_URL: "${ADDON_ORDER_PUBLIC_BASE_URL:-https://menu.chiluxe.vn}"
-      ADDON_ORDER_VIETQR_BANK_ID: "${ADDON_ORDER_VIETQR_BANK_ID}"
-      ADDON_ORDER_VIETQR_ACCOUNT_NO: "${ADDON_ORDER_VIETQR_ACCOUNT_NO}"
-      ADDON_ORDER_VIETQR_ACCOUNT_NAME: "${ADDON_ORDER_VIETQR_ACCOUNT_NAME}"
-      SEPAY_WEBHOOK_SECRET: "${SEPAY_WEBHOOK_SECRET}"
+    restart: "no"
+    networks: [app_network]
+
+  api:
+    image: hotel-manager-api:local
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment: *api-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     ports:
-      - '127.0.0.1:3001:3001'
+      - "${API_PORT:-3001}:3001"
     volumes:
-      - hotel_uploads_data:/app/uploads
-    networks:
-      - hotel_network
+      - uploads_data:/app/uploads
     healthcheck:
-      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3001/api/health\").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"']
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
+      retries: 20
+    networks: [app_network]
 
-  # ── Frontend (Next.js) ──────────────────────────────────────────────────────
   web:
+    image: hotel-manager-web:local
     build:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.chiluxe.vn}"
-    container_name: hotel_web
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
     restart: unless-stopped
+    init: true
     depends_on:
       api:
         condition: service_healthy
-    environment:
-      CHIHOME_BOOKING_BRIDGE_SECRET: "${CHIHOME_BOOKING_BRIDGE_SECRET}"
-      BOOKING_BRIDGE_SECRET: "${BOOKING_BRIDGE_SECRET:-}"
-      HOTEL_BRIDGE_API_KEY: "${HOTEL_BRIDGE_API_KEY:-}"
-      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://api.chiluxe.vn}"
     ports:
-      - '127.0.0.1:3000:3000'
-    networks:
-      - hotel_network
+      - "${WEB_PORT:-3000}:3000"
     healthcheck:
-      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3000/dashboard\").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"']
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
+      retries: 20
+    networks: [app_network]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [app_network]
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:

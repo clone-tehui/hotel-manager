@@ -2,9 +2,6 @@
 import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import { alpha, useTheme } from '@mui/material/styles';
 import { Box, Typography, Tooltip, Chip, Stack, useMediaQuery } from '@mui/material';
-import MaleIcon from '@mui/icons-material/Male';
-import FemaleIcon from '@mui/icons-material/Female';
-import TransgenderIcon from '@mui/icons-material/Transgender';
 import dayjs from 'dayjs';
 import { COUNTRY_OPTIONS } from '@/lib/countries';
 
@@ -27,30 +24,34 @@ type TimelineRow =
 interface Reservation {
   id: string;
   roomId: string;
-  reservationCode: string;
   primaryGuestName: string;
-  primaryGuestGender?: string | null;
   primaryGuestNationality?: string | null;
   company?: string;
   checkInDate: string;
   checkOutDate: string;
+  actualCheckIn?: string | null;
+  actualCheckOut?: string | null;
   status: string;
 }
 
-type VisualReservationState = 'BOOKED_PENDING' | 'IN_HOUSE' | 'CHECKED_OUT' | 'CANCELLED';
+type VisualReservationState = 'BOOKED' | 'PENDING_CHECKIN' | 'CHECKING_IN' | 'IN_HOUSE' | 'CHECKED_OUT' | 'CANCELLED';
 
 function getVisualReservationState(reservation: Reservation, now: dayjs.Dayjs): VisualReservationState {
   if (reservation.status === 'CANCELLED') return 'CANCELLED';
-  if (reservation.status === 'CHECKED_OUT') return 'CHECKED_OUT';
 
   const checkIn = dayjs(reservation.checkInDate);
   const checkOut = dayjs(reservation.checkOutDate);
 
-  if (now.isSame(checkOut) || now.isAfter(checkOut)) return 'CHECKED_OUT';
-  if (reservation.status === 'IN_HOUSE') return 'IN_HOUSE';
-  if (now.isSame(checkIn) || now.isAfter(checkIn)) return 'IN_HOUSE';
+  if (reservation.status === 'CHECKED_OUT' || reservation.actualCheckOut) return 'CHECKED_OUT';
+  // A manual early/on-time check-in stays in the check-in colour for that
+  // operating day, then naturally becomes the in-house colour on later days.
+  if (reservation.status === 'IN_HOUSE' && reservation.actualCheckIn && now.isSame(dayjs(reservation.actualCheckIn), 'day')) return 'CHECKING_IN';
+  if (now.isSame(checkOut, 'day') || now.isAfter(checkOut, 'day')) return 'CHECKED_OUT';
+  if (now.isSame(checkIn, 'day')) return 'CHECKING_IN';
+  if (reservation.status === 'IN_HOUSE' || now.isAfter(checkIn, 'day')) return 'IN_HOUSE';
+  if (reservation.status === 'PENDING_CHECKIN') return 'PENDING_CHECKIN';
 
-  return 'BOOKED_PENDING';
+  return 'BOOKED';
 }
 
 interface Props {
@@ -68,18 +69,14 @@ interface Props {
 }
 
 const STATUS_BASE = {
-  BOOKED_PENDING: '#2563EB',
-  IN_HOUSE: '#DC2626',
-  CHECKED_OUT: '#EAB308',
-  CANCELLED: '#F97316',
+  BOOKED: '#2585DD',
+  PENDING_CHECKIN: '#9926B7',
+  CHECKING_IN: '#E83808',
+  IN_HOUSE: '#FF963D',
+  CHECKED_OUT: '#E16BE1',
+  CANCELLED: '#8B8B8B',
   DEFAULT: '#64748B',
 } as const;
-
-const GENDER_ICON_MAP: Record<string, typeof MaleIcon> = {
-  MALE: MaleIcon,
-  FEMALE: FemaleIcon,
-  NON_BINARY: TransgenderIcon,
-};
 
 const NATIONALITY_FLAG_ALIASES: Record<string, string> = {
   'việt nam': '🇻🇳',
@@ -172,10 +169,10 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
   const separatorHeight = isMobile ? 28 : 36;
 
   const roomStatusColor: Record<string, string> = {
-    VACANT: '#5F9B86',
-    RESERVED: '#5F84D6',
-    OCCUPIED: '#C98B63',
-    DIRTY: '#7E8AA0',
+    VACANT: '#3FA047',
+    RESERVED: '#2585DD',
+    OCCUPIED: '#FF963D',
+    DIRTY: '#000000',
     MAINTENANCE: '#A56C74',
   };
 
@@ -243,7 +240,6 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
   const resByRoom = useMemo(() => {
     const map = new Map<string, Reservation[]>();
     for (const reservation of reservations) {
-      if (reservation.status === 'CANCELLED') continue;
       if (!map.has(reservation.roomId)) map.set(reservation.roomId, []);
       map.get(reservation.roomId)!.push(reservation);
     }
@@ -277,8 +273,6 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
   const rangeEnd = useMemo(() => rangeStart.add(days.length, 'day'), [rangeStart, days.length]);
 
   const getBarStyle = useCallback((res: Reservation) => {
-    if (res.status === 'CANCELLED') return null;
-
     const cin = dayjs(res.checkInDate);
     const cout = dayjs(res.checkOutDate);
     const visibleStart = cin.isAfter(rangeStart) ? cin : rangeStart;
@@ -524,9 +518,7 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
                       const geo = getBarStyle(res);
                       if (!geo) return null;
                       const { left, width, bg, border } = geo;
-                      const showCode = width > 170;
                       const showDates = width > 265;
-                      const GenderIcon = res.primaryGuestGender ? GENDER_ICON_MAP[res.primaryGuestGender] : null;
                       const nationalityFlag = resolveCountryFlag(res.primaryGuestNationality);
                       return (
                         <Tooltip
@@ -536,7 +528,7 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
                           title={
                             <Box>
                               <Typography variant="caption" fontWeight={700} display="block">{res.primaryGuestName}</Typography>
-                              <Typography variant="caption" color="text.secondary" display="block">{res.reservationCode} · {geo.label}</Typography>
+                              <Typography variant="caption" color="text.secondary" display="block">{geo.label}</Typography>
                               <Typography variant="caption" display="block">{dayjs(res.checkInDate).format('DD/MM/YYYY HH:mm')} → {dayjs(res.checkOutDate).format('DD/MM/YYYY HH:mm')}</Typography>
                               {res.primaryGuestNationality && (
                                 <Typography variant="caption" display="block">
@@ -572,7 +564,6 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
                               '&:hover': { filter: 'brightness(0.98)' },
                             }}
                           >
-                            {GenderIcon ? <GenderIcon sx={{ fontSize: isMobile ? 14 : 15, flexShrink: 0, color: '#FFFFFF' }} /> : null}
                             <Typography
                               variant="body2"
                               sx={{
@@ -594,7 +585,6 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
                                 {nationalityFlag}
                               </Typography>
                             ) : null}
-                            {!isMobile && showCode && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.96)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace', flexShrink: 0 }}>{res.reservationCode}</Typography>}
                             {!isMobile && showDates && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.92)', fontWeight: 500, marginLeft: 'auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}>{dayjs(res.checkInDate).format('DD/MM HH:mm')} - {dayjs(res.checkOutDate).format('DD/MM HH:mm')}</Typography>}
                           </Box>
                         </Tooltip>

@@ -1,0 +1,12 @@
+chiluxe.vn {
+  redir https://www.chiluxe.vn{uri} permanent
+}
+
+www.chiluxe.vn {
+  encode zstd gzip
+
+  @api path /api/* /uploads/*
+  reverse_proxy @api api:3001
+
+  reverse_proxy web:3000
+}

@@ -3,6 +3,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
 import { ReservationsService } from './reservations.service';
 import { ReservationActionsService } from './reservation-actions.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
@@ -18,7 +20,7 @@ import { QueryQuickRoomSearchDto } from './dto/query-quick-room-search.dto';
 
 @ApiTags('Reservations')
 @ApiBearerAuth('JWT')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('reservations')
 export class ReservationsController {
   constructor(
@@ -62,6 +64,7 @@ export class ReservationsController {
   // ── ACTIONS ───────────────────────────────────────────────────────────────
 
   @Post(':id/cancel')
+  @Roles('ADMIN', 'USER')
   @ApiOperation({
     summary: 'Huỷ đặt phòng',
     description: 'Chuyển trạng thái → CANCELLED. Bắt buộc có lý do huỷ. Phòng được giải phóng về VACANT.',
@@ -89,6 +92,7 @@ export class ReservationsController {
   }
 
   @Post(':id/check-in')
+  @Roles('ADMIN', 'USER')
   @ApiOperation({
     summary: 'Check-in khách',
     description: 'Yêu cầu phòng đã được gán. Phòng → OCCUPIED. Trạng thái → IN_HOUSE.',
@@ -98,6 +102,7 @@ export class ReservationsController {
   }
 
   @Post(':id/check-out')
+  @Roles('ADMIN', 'USER')
   @ApiOperation({
     summary: 'Check-out khách',
     description: 'Chỉ được khi IN_HOUSE. Phòng → DIRTY. Trạng thái → CHECKED_OUT.',

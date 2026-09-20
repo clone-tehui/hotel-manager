@@ -48,6 +48,9 @@ const DEFAULT_CHECKIN_TIME = '14:00';
 const DEFAULT_CHECKOUT_TIME = '12:00';
 const SOURCE_OPTIONS = [
   { value: 'airbnb', label: 'Airbnb' },
+  { value: 'trip', label: 'Trip.com' },
+  { value: 'agoda', label: 'Agoda' },
+  { value: 'booking', label: 'Booking.com' },
   { value: 'zalo', label: 'Zalo' },
   { value: 'sale', label: 'Sale' },
   { value: 'khac', label: 'Khác' },

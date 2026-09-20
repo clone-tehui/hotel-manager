@@ -30,6 +30,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/src/ai-ceo-agent/AGENT.md ./dist/src/ai-ceo-agent/AGENT.md
 COPY --from=builder /app/src/ai-ceo-agent/KNOWLEDGE.md ./dist/src/ai-ceo-agent/KNOWLEDGE.md
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/scripts ./scripts
 
 EXPOSE 3001
 CMD ["node", "dist/src/main"]

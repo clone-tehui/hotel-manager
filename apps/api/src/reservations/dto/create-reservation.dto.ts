@@ -63,9 +63,9 @@ export class CreateReservationDto {
   @Min(0)
   depositAmount?: number;
 
-  @ApiProperty({ example: 'airbnb', description: 'Nền tảng đặt phòng', enum: ['airbnb', 'zalo', 'sale', 'khac'] })
+  @ApiProperty({ example: 'airbnb', description: 'Nền tảng đặt phòng', enum: ['airbnb', 'trip', 'agoda', 'booking', 'zalo', 'sale', 'khac'] })
   @IsString()
-  @IsIn(['airbnb', 'zalo', 'sale', 'khac'])
+  @IsIn(['airbnb', 'trip', 'agoda', 'booking', 'zalo', 'sale', 'khac'])
   source: string;
 
   @ApiPropertyOptional({ example: '1797862434179915711', description: 'Thread ID Zalo nếu booking đến từ hội thoại Zalo' })

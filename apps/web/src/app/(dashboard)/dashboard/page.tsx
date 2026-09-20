@@ -44,7 +44,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import dayjs from 'dayjs';
 import quarterOfYear from 'dayjs/plugin/quarterOfYear';
 import 'dayjs/locale/vi';
-import { useAiCeoCampaigns, useDashboardReport, useDashboardSummary } from '@/hooks/api';
+import { useAiCeoCampaigns, useDashboardCustomerReport, useDashboardReport, useDashboardSummary } from '@/hooks/api';
 import { StatusChip } from '@/components/common/StatusChip';
 import { ReservationDrawer } from '@/components/reservation/ReservationDrawer';
 
@@ -53,6 +53,8 @@ dayjs.extend(quarterOfYear);
 
 type ChartMode = 'pie' | 'bar';
 type SourcePeriodMode = 'week' | 'month' | 'quarter' | 'year';
+type CustomerReportPeriod = 'day' | 'month' | 'year';
+type RevenuePeriod = 'day' | 'week' | 'previousMonth' | 'month' | 'nextMonth' | 'year' | 'customMonth';
 
 function formatCurrency(value?: number) {
   return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value ?? 0);
@@ -62,7 +64,7 @@ function formatCompactCurrency(value?: number) {
   return new Intl.NumberFormat('vi-VN', { notation: 'compact', maximumFractionDigits: 1 }).format(value ?? 0);
 }
 
-type OccupancyStrategyPeriod = 'thisWeek' | 'nextWeek' | 'thisMonth' | 'nextMonth';
+type OccupancyStrategyPeriod = 'previousWeek' | 'thisWeek' | 'nextWeek' | 'previousMonth' | 'thisMonth' | 'nextMonth';
 
 type StrategyPeriodConfig = {
   key: OccupancyStrategyPeriod;
@@ -79,11 +81,14 @@ function getMonday(date: dayjs.Dayjs) {
 
 function getOccupancyStrategyPeriods(now = dayjs()): StrategyPeriodConfig[] {
   const monday = getMonday(now);
+  const previousMonth = now.subtract(1, 'month').startOf('month');
   const thisMonth = now.startOf('month');
   const nextMonth = now.add(1, 'month').startOf('month');
   const periods: StrategyPeriodConfig[] = [
+    { key: 'previousWeek', title: 'Tuần trước', subtitle: 'Kỳ đã kết thúc, từ Thứ Hai đến Chủ Nhật', from: monday.subtract(7, 'day').format('YYYY-MM-DD'), to: monday.subtract(1, 'day').format('YYYY-MM-DD'), kind: 'week' },
     { key: 'thisWeek', title: 'Tuần này', subtitle: 'Kỳ được chốt từ Thứ Hai đầu tuần', from: monday.format('YYYY-MM-DD'), to: monday.add(6, 'day').format('YYYY-MM-DD'), kind: 'week' },
     { key: 'nextWeek', title: 'Tuần sau', subtitle: 'Kỳ kế tiếp, bắt đầu từ Thứ Hai', from: monday.add(7, 'day').format('YYYY-MM-DD'), to: monday.add(13, 'day').format('YYYY-MM-DD'), kind: 'week' },
+    { key: 'previousMonth', title: 'Tháng trước', subtitle: 'Kỳ đã kết thúc từ ngày 01 đến hết tháng', from: previousMonth.format('YYYY-MM-DD'), to: previousMonth.endOf('month').format('YYYY-MM-DD'), kind: 'month' },
     { key: 'thisMonth', title: 'Tháng này', subtitle: 'Kỳ được chốt từ ngày 01 hằng tháng', from: thisMonth.format('YYYY-MM-DD'), to: thisMonth.endOf('month').format('YYYY-MM-DD'), kind: 'month' },
   ];
   // Tháng sau chỉ được theo dõi từ ngày 15 của tháng hiện tại.
@@ -93,9 +98,37 @@ function getOccupancyStrategyPeriods(now = dayjs()): StrategyPeriodConfig[] {
   return periods;
 }
 
+function getPeriodFinancials(period: StrategyPeriodConfig, rooms: any[]) {
+  const rangeEnd = dayjs(period.to).startOf('day');
+  let revenue = 0;
+  let allocatedCost = 0;
+  let roomsMissingCost = 0;
+
+  rooms.forEach((room) => {
+    revenue += Number(room.bookedNightRevenue ?? 0);
+    const monthlyCost = Number(room.monthlyCost ?? 0);
+    if (monthlyCost <= 0) {
+      roomsMissingCost += 1;
+      return;
+    }
+
+    // Giá vốn là theo tháng; phân bổ chính xác theo số ngày thuộc từng tháng của kỳ báo cáo.
+    let cursor = dayjs(period.from).startOf('day');
+    while (cursor.isBefore(rangeEnd) || cursor.isSame(rangeEnd, 'day')) {
+      const monthEnd = cursor.endOf('month').startOf('day');
+      const segmentEnd = monthEnd.isBefore(rangeEnd) ? monthEnd : rangeEnd;
+      const daysInSegment = segmentEnd.diff(cursor, 'day') + 1;
+      allocatedCost += monthlyCost * (daysInSegment / cursor.daysInMonth());
+      cursor = segmentEnd.add(1, 'day').startOf('day');
+    }
+  });
+
+  return { revenue, breakEvenRevenue: allocatedCost, profit: revenue - allocatedCost, roomsMissingCost };
+}
+
 type RoomPricingStrategy = {
-  level: 'Đỏ' | 'Vàng' | 'Xanh' | 'Chờ giá vốn';
-  color: 'error' | 'warning' | 'success' | 'default';
+  level: 'Đỏ' | 'Vàng' | 'Xanh dương' | 'Chờ giá vốn';
+  color: 'error' | 'warning' | 'primary' | 'default';
   text: string;
   action: string;
   review: string;
@@ -119,8 +152,10 @@ function getRoomPricingStrategy(room: any, currentMonthRoom: any, kind: 'week' |
   if (!hasCost) {
     return { level: 'Chờ giá vốn', color: 'default', action: 'Tiếp tục tăng tín hiệu booking', text: 'Căn đã có booking nhưng chưa đủ dữ liệu giá vốn để tối ưu hòa vốn tháng.', review: 'Tiếp tục chiến dịch theo booked-night pace; bổ sung giá vốn trước pha phục hồi giá.' };
   }
-  if (brokeEven && vacant > 0) {
-    return { level: 'Xanh', color: 'success', action: 'Đề xuất giảm 30–40% cho các đêm trống', text: 'Căn đã hoàn vốn trong tháng hiện tại; ưu tiên lấp đầy để tối đa lợi nhuận.', review: 'Đánh giá lại sau 3 ngày; chỉ áp dụng khi người quản lý duyệt.' };
+  if (brokeEven) {
+    return vacant > 0
+      ? { level: 'Xanh dương', color: 'primary', action: 'Đề xuất giảm 30–40% cho các đêm trống', text: 'Căn đã hoàn vốn trong tháng hiện tại; ưu tiên lấp đầy để tối đa lợi nhuận.', review: 'Đánh giá lại sau 3 ngày; chỉ áp dụng khi người quản lý duyệt.' }
+      : { level: 'Xanh dương', color: 'primary', action: 'Giữ giá', text: 'Căn đã hoàn vốn trong tháng hiện tại và không còn đêm trống trong kỳ.', review: 'Đánh giá lại khi có booking mới hoặc hủy phòng.' };
   }
   if (!brokeEven && reachedHalf) {
     return { level: 'Vàng', color: 'warning', action: 'Dừng giảm sâu, tăng giá dần về giá chuẩn', text: `Đã book ${occupied}/${total} đêm của kỳ (≥50%) nhưng tháng hiện tại còn thiếu ${Math.max(0, Number(monthlyCost) - currentRevenue).toLocaleString('vi-VN')}đ để hoàn vốn.`, review: 'Đánh giá lại sau 3 ngày; ưu tiên giá giúp bù phần còn thiếu.' };
@@ -246,7 +281,7 @@ function MonthlyTrendChart({ items }: any) {
   );
 }
 
-function OccupancyGauge({ occupied, total, percentage }: { occupied?: number; total?: number; percentage?: number }) {
+function OccupancyGauge({ occupied, total, percentage, monthRate, previousMonthRate }: { occupied?: number; total?: number; percentage?: number; monthRate?: number; previousMonthRate?: number }) {
   const pct = Math.max(0, Math.min(100, Number(percentage ?? 0)));
   const color = pct >= 80 ? '#DC2626' : pct >= 60 ? '#D97706' : pct >= 40 ? '#2563EB' : '#16A34A';
   const size = 180;
@@ -270,7 +305,11 @@ function OccupancyGauge({ occupied, total, percentage }: { occupied?: number; to
       <Stack spacing={1} sx={{ width: '100%' }}>
         <Chip label={pct >= 80 ? 'Công suất rất cao' : pct >= 60 ? 'Công suất cao' : pct >= 40 ? 'Công suất ổn' : 'Công suất thấp'} sx={{ bgcolor: color, color: '#fff', fontWeight: 800, width: 'fit-content' }} />
         <Typography variant="body2" color="text.secondary">Đang có khách / tổng căn đang hoạt động</Typography>
-        <Typography variant="h6" fontWeight={800}>{occupied ?? 0} / {total ?? 0} căn</Typography>
+        <Typography variant="h6" fontWeight={800}>{occupied ?? 0} đang ở / {total ?? 0} căn</Typography>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Chip size="small" color="primary" label={`Tổng % tháng này: ${Number(monthRate ?? 0).toFixed(1)}%`} />
+          <Chip size="small" variant="outlined" color={(monthRate ?? 0) >= (previousMonthRate ?? 0) ? 'success' : 'error'} label={`Tháng trước: ${Number(previousMonthRate ?? 0).toFixed(1)}%`} />
+        </Stack>
         <Typography variant="caption" color="text.secondary">Màu sẽ đổi theo mức độ lấp đầy để nhìn nhanh tình hình vận hành.</Typography>
       </Stack>
     </Stack>
@@ -403,8 +442,12 @@ export default function DashboardPage() {
   const [occupancyExpanded, setOccupancyExpanded] = useState(false);
   // AI strategy output must be visible immediately; detailed campaign state is not hidden behind a collapsed panel.
   const [strategyExpanded, setStrategyExpanded] = useState<Record<string, boolean>>({ thisWeek: true });
-  const [sourcePeriod, setSourcePeriod] = useState<SourcePeriodMode>('month');
+  const [sourceMonth, setSourceMonth] = useState(() => dayjs().format('YYYY-MM'));
   const [occupancyPeriod, setOccupancyPeriod] = useState<SourcePeriodMode>('month');
+  const [customerReportPeriod, setCustomerReportPeriod] = useState<CustomerReportPeriod>('month');
+  const [customerReportValue, setCustomerReportValue] = useState(() => dayjs().format('YYYY-MM'));
+  const [quickRevenuePeriod, setQuickRevenuePeriod] = useState<RevenuePeriod>('month');
+  const [quickRevenueMonth, setQuickRevenueMonth] = useState(() => dayjs().format('YYYY-MM'));
   const { data, isLoading } = useDashboardSummary();
   const occupancyRange = useMemo(() => {
     const now = dayjs();
@@ -422,32 +465,57 @@ export default function DashboardPage() {
     return { from: now.startOf('year').format('YYYY-MM-DD'), to: now.endOf('year').format('YYYY-MM-DD') };
   }, [occupancyPeriod]);
   const { data: occupancyReportData, isLoading: isOccupancyLoading, isFetching: isOccupancyFetching } = useDashboardReport(occupancyRange);
+  const currentMonthOccupancyRange = useMemo(() => ({ from: dayjs().startOf('month').format('YYYY-MM-DD'), to: dayjs().endOf('month').format('YYYY-MM-DD') }), []);
+  const previousMonthOccupancyRange = useMemo(() => ({ from: dayjs().subtract(1, 'month').startOf('month').format('YYYY-MM-DD'), to: dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD') }), []);
+  const { data: currentMonthOccupancyData } = useDashboardReport(currentMonthOccupancyRange);
+  const { data: previousMonthOccupancyData } = useDashboardReport(previousMonthOccupancyRange);
+  const quickRevenueRange = useMemo(() => {
+    const now = dayjs();
+    if (quickRevenuePeriod === 'day') return { from: now.format('YYYY-MM-DD'), to: now.format('YYYY-MM-DD') };
+    if (quickRevenuePeriod === 'week') { const monday = getMonday(now); return { from: monday.format('YYYY-MM-DD'), to: monday.add(6, 'day').format('YYYY-MM-DD') }; }
+    if (quickRevenuePeriod === 'year') return { from: now.startOf('year').format('YYYY-MM-DD'), to: now.endOf('year').format('YYYY-MM-DD') };
+    const month = quickRevenuePeriod === 'customMonth'
+      ? dayjs(`${quickRevenueMonth}-01`)
+      : quickRevenuePeriod === 'previousMonth'
+        ? now.subtract(1, 'month')
+        : quickRevenuePeriod === 'nextMonth'
+          ? now.add(1, 'month')
+          : now;
+    return { from: month.startOf('month').format('YYYY-MM-DD'), to: month.endOf('month').format('YYYY-MM-DD') };
+  }, [quickRevenuePeriod, quickRevenueMonth]);
+  const { data: quickRevenueData, isLoading: isQuickRevenueLoading } = useDashboardReport(quickRevenueRange);
   const strategyPeriods = useMemo(() => getOccupancyStrategyPeriods(), []);
+  const previousWeekStrategy = strategyPeriods.find((period) => period.key === 'previousWeek')!;
   const thisWeekStrategy = strategyPeriods.find((period) => period.key === 'thisWeek')!;
   const nextWeekStrategy = strategyPeriods.find((period) => period.key === 'nextWeek')!;
+  const previousMonthStrategy = strategyPeriods.find((period) => period.key === 'previousMonth')!;
   const thisMonthStrategy = strategyPeriods.find((period) => period.key === 'thisMonth')!;
   const nextMonthStrategy = strategyPeriods.find((period) => period.key === 'nextMonth');
+  const { data: previousWeekStrategyData, isLoading: isPreviousWeekStrategyLoading } = useDashboardReport({ from: previousWeekStrategy.from, to: previousWeekStrategy.to });
   const { data: thisWeekStrategyData, isLoading: isThisWeekStrategyLoading } = useDashboardReport({ from: thisWeekStrategy.from, to: thisWeekStrategy.to });
   const { data: nextWeekStrategyData, isLoading: isNextWeekStrategyLoading } = useDashboardReport({ from: nextWeekStrategy.from, to: nextWeekStrategy.to });
+  const { data: previousMonthStrategyData, isLoading: isPreviousMonthStrategyLoading } = useDashboardReport({ from: previousMonthStrategy.from, to: previousMonthStrategy.to });
   const { data: thisMonthStrategyData, isLoading: isThisMonthStrategyLoading } = useDashboardReport({ from: thisMonthStrategy.from, to: thisMonthStrategy.to });
   const { data: aiCampaignData } = useAiCeoCampaigns();
   const { data: nextMonthStrategyData, isLoading: isNextMonthStrategyLoading } = useDashboardReport(nextMonthStrategy ? { from: nextMonthStrategy.from, to: nextMonthStrategy.to } : undefined, !!nextMonthStrategy);
   const sourceRange = useMemo(() => {
-    const now = dayjs();
-    if (sourcePeriod === 'week') {
-      const monday = now.day() === 0 ? now.subtract(6, 'day') : now.day() === 1 ? now : now.subtract(now.day() - 1, 'day');
-      const sunday = monday.add(6, 'day');
-      return { from: monday.format('YYYY-MM-DD'), to: sunday.format('YYYY-MM-DD') };
-    }
-    if (sourcePeriod === 'month') {
-      return { from: now.startOf('month').format('YYYY-MM-DD'), to: now.endOf('month').format('YYYY-MM-DD') };
-    }
-    if (sourcePeriod === 'quarter') {
-      return { from: now.startOf('quarter').format('YYYY-MM-DD'), to: now.endOf('quarter').format('YYYY-MM-DD') };
-    }
-    return { from: now.startOf('year').format('YYYY-MM-DD'), to: now.endOf('year').format('YYYY-MM-DD') };
-  }, [sourcePeriod]);
+    const month = dayjs(`${sourceMonth}-01`);
+    return { from: month.startOf('month').format('YYYY-MM-DD'), to: month.endOf('month').format('YYYY-MM-DD') };
+  }, [sourceMonth]);
   const { data: sourceReportData, isLoading: isSourceReportLoading, isFetching: isSourceReportFetching } = useDashboardReport(sourceRange);
+  const customerReportRange = useMemo(() => {
+    if (customerReportPeriod === 'day') {
+      const date = dayjs(customerReportValue);
+      return { from: date.format('YYYY-MM-DD'), to: date.format('YYYY-MM-DD') };
+    }
+    if (customerReportPeriod === 'year') {
+      const date = dayjs(`${customerReportValue}-01-01`);
+      return { from: date.startOf('year').format('YYYY-MM-DD'), to: date.endOf('year').format('YYYY-MM-DD') };
+    }
+    const date = dayjs(`${customerReportValue}-01`);
+    return { from: date.startOf('month').format('YYYY-MM-DD'), to: date.endOf('month').format('YYYY-MM-DD') };
+  }, [customerReportPeriod, customerReportValue]);
+  const { data: customerReportData, isLoading: isCustomerReportLoading } = useDashboardCustomerReport(customerReportRange);
   const summary = data?.data;
 
   if (isLoading && !summary) {
@@ -460,7 +528,6 @@ export default function DashboardPage() {
 
   const rooms = summary?.rooms ?? {};
   const reservations = summary?.reservations ?? {};
-  const guests = summary?.guests ?? {};
   const revenue = summary?.revenue ?? {};
   const analytics = summary?.analytics ?? {};
   const recent: any[] = summary?.recent ?? [];
@@ -468,7 +535,17 @@ export default function DashboardPage() {
   const genderBreakdown: any[] = analytics.genderBreakdown ?? [];
   const trackedGenderTotal = genderBreakdown.reduce((sum: number, item: any) => sum + Number(item.count ?? 0), 0);
   const filteredSourceBreakdown = sourceReportData?.data?.revenue?.bySource ?? [];
-  const occupancyRooms: any[] = occupancyReport?.occupancy?.byRoom ?? [];
+  // Ưu tiên các căn chưa hoàn vốn để đội vận hành nhìn thấy việc cần xử lý trước.
+  const occupancyRooms: any[] = [...(occupancyReport?.occupancy?.byRoom ?? [])].sort((a: any, b: any) => {
+    const balance = (room: any) => room.monthlyCost == null ? null : Number(room.bookedNightRevenue ?? 0) - Number(room.monthlyCost);
+    const aBalance = balance(a);
+    const bBalance = balance(b);
+    const aPriority = aBalance !== null && aBalance < 0 ? 0 : aBalance === null ? 1 : 2;
+    const bPriority = bBalance !== null && bBalance < 0 ? 0 : bBalance === null ? 1 : 2;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    if (aPriority === 0) return aBalance! - bBalance!;
+    return Number(a.occupancyRate ?? 0) - Number(b.occupancyRate ?? 0);
+  });
   const occupancyRoomCount = occupancyRooms.length;
   const occupancyBands = {
     above50: occupancyRooms.filter((room: any) => Number(room.occupancyRate ?? 0) >= 50).length,
@@ -491,8 +568,10 @@ export default function DashboardPage() {
   const currentAiCampaignCount = latestAiCampaignValues.filter((campaign: any) => campaign.periodKey === 'thisWeek').length;
   const latestAiAssessmentAt = latestAiCampaignValues.reduce((latest: string | null, campaign: any) => { const candidate = campaign.outputGeneratedAt || campaign.createdAt || campaign.updatedAt; return candidate && (!latest || new Date(candidate) > new Date(latest)) ? candidate : latest; }, null);
   const strategyReports = [
+    { period: previousWeekStrategy, report: previousWeekStrategyData?.data, loading: isPreviousWeekStrategyLoading },
     { period: thisWeekStrategy, report: thisWeekStrategyData?.data, loading: isThisWeekStrategyLoading },
     { period: nextWeekStrategy, report: nextWeekStrategyData?.data, loading: isNextWeekStrategyLoading },
+    { period: previousMonthStrategy, report: previousMonthStrategyData?.data, loading: isPreviousMonthStrategyLoading },
     { period: thisMonthStrategy, report: thisMonthStrategyData?.data, loading: isThisMonthStrategyLoading },
     ...(nextMonthStrategy ? [{ period: nextMonthStrategy, report: nextMonthStrategyData?.data, loading: isNextMonthStrategyLoading }] : []),
   ];
@@ -511,24 +590,65 @@ export default function DashboardPage() {
 
       <Grid container spacing={2} mb={3}>
         <Grid item xs={12}>
+          <Grid container spacing={2}>
+            <Grid item xs={12} lg={6}>
           <SectionCard title="Tình trạng vận hành" sub="Ảnh chụp nhanh nội bộ" icon={<ApartmentIcon color="primary" fontSize="small" />}>
             <Stack spacing={1.6}>
-              <OccupancyGauge occupied={rooms.occupied} total={rooms.total} percentage={rooms.occupancyRate} />
+              <OccupancyGauge occupied={rooms.occupied} total={rooms.total} percentage={rooms.occupancyRate} monthRate={currentMonthOccupancyData?.data?.occupancy?.overallRate} previousMonthRate={previousMonthOccupancyData?.data?.occupancy?.overallRate} />
               <Divider />
               <Grid container spacing={1.5}>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Căn đang giữ chỗ</Typography><Typography fontWeight={700}>{rooms.reserved ?? 0}</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Căn trống sẵn</Typography><Typography fontWeight={700}>{rooms.available ?? 0}</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Căn bảo trì</Typography><Typography fontWeight={700}>{rooms.maintenance ?? 0}</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Tổng hồ sơ khách</Typography><Typography fontWeight={700}>{guests.total ?? 0}</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Số quốc tịch đã ghi nhận</Typography><Typography fontWeight={700}>{guests.nationalitiesTracked ?? 0}</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Hồ sơ có giới tính</Typography><Typography fontWeight={700}>{guests.genderProfilesTracked ?? 0}</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Số đêm lưu trú TB</Typography><Typography fontWeight={700}>{analytics.averageStayNights ?? 0} đêm</Typography></Stack></Grid>
-                <Grid item xs={12} sm={6} md={3}><Stack direction="row" justifyContent="space-between"><Typography variant="body2">Giá trị booking TB</Typography><Typography fontWeight={700}>{formatCompactCurrency(analytics.averageBookingValue)}</Typography></Stack></Grid>
+                <Grid item xs={12} sm={6}><Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}><Typography variant="caption" color="text.secondary">Tổng căn Check-in hôm nay</Typography><Typography variant="h5" fontWeight={800}>{reservations.arrivalRoomsToday ?? 0} căn</Typography><Typography variant="caption" color="text.secondary">căn duy nhất có lịch Check-in hôm nay</Typography></Paper></Grid>
+                <Grid item xs={12} sm={6}><Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}><Typography variant="caption" color="text.secondary">Tổng căn Check-out hôm nay</Typography><Typography variant="h5" fontWeight={800}>{reservations.checkoutRoomsToday ?? 0} căn</Typography><Typography variant="caption" color="text.secondary">căn duy nhất có lịch Check-out hôm nay</Typography></Paper></Grid>
+                <Grid item xs={12}><Typography variant="subtitle2" fontWeight={800}>Khách chưa Check-in hôm nay</Typography></Grid>
+                {(reservations.arrivalsTodayBySource ?? []).map((item: any) => <Grid item xs={6} sm={4} md={3} key={item.source}><Stack direction="row" justifyContent="space-between" gap={1}><Typography variant="body2" noWrap>{item.label}</Typography><Chip size="small" label={item.bookings ?? 0} color={(item.bookings ?? 0) ? 'warning' : 'default'} /></Stack></Grid>)}
               </Grid>
             </Stack>
           </SectionCard>
+            </Grid>
+            <Grid item xs={12} lg={6}>
+              <SectionCard title="Doanh thu ghi nhận" sub="Phân bổ theo từng đêm lưu trú của booking không hủy" icon={<TrendingUpIcon color="primary" fontSize="small" />}>
+                <Stack spacing={1.5}>
+                  <ToggleButtonGroup size="small" exclusive value={quickRevenuePeriod} onChange={(_, value: RevenuePeriod | null) => value && setQuickRevenuePeriod(value)} aria-label="Kỳ doanh thu ghi nhận">
+                    <ToggleButton value="day">Ngày</ToggleButton><ToggleButton value="week">Tuần</ToggleButton><ToggleButton value="previousMonth">Tháng trước</ToggleButton><ToggleButton value="month">Tháng này</ToggleButton><ToggleButton value="nextMonth">Tháng sau</ToggleButton><ToggleButton value="year">Năm</ToggleButton><ToggleButton value="customMonth">Chọn tháng</ToggleButton>
+                  </ToggleButtonGroup>
+                  {quickRevenuePeriod === 'customMonth' && <TextField label="Chọn tháng" type="month" size="small" value={quickRevenueMonth} onChange={(event) => setQuickRevenueMonth(event.target.value)} InputLabelProps={{ shrink: true }} sx={{ maxWidth: 190 }} />}
+                  {isQuickRevenueLoading ? <Box sx={{ py: 3, display: 'flex', justifyContent: 'center' }}><CircularProgress size={24} /></Box> : <>
+                    <Typography variant="h4" fontWeight={900}>{formatCurrency(quickRevenueData?.data?.revenue?.total)}</Typography>
+                    <Typography variant="body2" color="text.secondary">{dayjs(quickRevenueRange.from).format('DD/MM/YYYY')} → {dayjs(quickRevenueRange.to).format('DD/MM/YYYY')} · {quickRevenueData?.data?.revenue?.bookings ?? 0} booking ghi nhận</Typography>
+                    <Divider />
+                    <Stack direction="row" spacing={3}>
+                      <Box><Typography variant="caption" color="text.secondary">TB / booking</Typography><Typography fontWeight={800}>{formatCompactCurrency(quickRevenueData?.data?.revenue?.avgBookingValue)}</Typography></Box>
+                      <Box><Typography variant="caption" color="text.secondary">TB số đêm</Typography><Typography fontWeight={800}>{quickRevenueData?.data?.revenue?.avgStayNights ?? 0} đêm</Typography></Box>
+                      <Box><Typography variant="caption" color="text.secondary">Tỷ lệ lấp đầy</Typography><Typography fontWeight={800} color="primary.main">{Number(quickRevenueData?.data?.occupancy?.overallRate ?? 0).toFixed(1)}%</Typography></Box>
+                    </Stack>
+                  </>}
+                </Stack>
+              </SectionCard>
+            </Grid>
+          </Grid>
         </Grid>
       </Grid>
+
+      <SectionCard title="Báo cáo căn Check-in / Check-out hôm nay" sub={`${reservations.arrivalRoomsToday ?? 0} căn Check-in · ${reservations.checkoutRoomsToday ?? 0} căn Check-out`} icon={<EventAvailableIcon color="primary" fontSize="small" />}>
+        {(reservations.dailyRoomMovements ?? []).length === 0 ? (
+          <Typography variant="body2" color="text.secondary">Không có căn Check-in hoặc Check-out hôm nay.</Typography>
+        ) : (
+          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+            <Table size="small">
+              <TableHead><TableRow><TableCell sx={{ fontWeight: 800 }}>Mã căn hộ</TableCell><TableCell sx={{ fontWeight: 800 }}>Khách Check-out</TableCell><TableCell sx={{ fontWeight: 800 }}>Khách Check-in</TableCell></TableRow></TableHead>
+              <TableBody>
+                {(reservations.dailyRoomMovements ?? []).map((item: any) => (
+                  <TableRow key={item.roomId} hover>
+                    <TableCell><Typography fontWeight={800}>{item.roomNumber}</Typography></TableCell>
+                    <TableCell>{item.checkOutGuests?.length ? item.checkOutGuests.join(', ') : '—'}</TableCell>
+                    <TableCell>{item.checkInGuests?.length ? item.checkInGuests.join(', ') : '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </SectionCard>
 
       <Grid container spacing={2} mb={3}>
         <Grid item xs={12}>
@@ -639,6 +759,7 @@ export default function DashboardPage() {
                 const currentMonthRooms = thisMonthStrategyData?.data?.occupancy?.byRoom ?? [];
                 const currentMonthByRoom = new Map<string, any>(currentMonthRooms.map((room: any) => [room.roomId, room]));
                 const redCount = reportRooms.filter((room) => getRoomPricingStrategy(room, currentMonthByRoom.get(room.roomId), period.kind).level === 'Đỏ').length;
+                const financials = getPeriodFinancials(period, reportRooms);
                 const expanded = Boolean(strategyExpanded[period.key]);
                 return (
                   <Paper key={period.key} variant="outlined" sx={{ overflow: 'hidden', borderRadius: 2 }}>
@@ -646,9 +767,12 @@ export default function DashboardPage() {
                       <Box>
                         <Stack direction="row" spacing={1} alignItems="center">
                           <Typography variant="subtitle2" fontWeight={800}>{period.title}</Typography>
+                          {report && <Chip size="small" variant="outlined" color="info" label={`Doanh thu hiện tại ${formatCurrency(financials.revenue)}`} sx={{ fontWeight: 800 }} />}
+                          {report && <Chip size="small" variant="outlined" color="warning" label={`Cần hoàn vốn ${formatCurrency(financials.breakEvenRevenue)}`} sx={{ fontWeight: 800 }} />}
+                          {report && <Chip size="small" variant="outlined" color={financials.profit >= 0 ? 'primary' : 'error'} label={`Lợi nhuận ${financials.profit >= 0 ? '+' : ''}${formatCurrency(financials.profit)}`} sx={{ fontWeight: 800 }} />}
                           {report && <Chip size="small" color={redCount ? 'error' : 'success'} label={redCount ? `${redCount} căn cần ưu tiên` : 'Không có căn cảnh báo đỏ'} />}
                         </Stack>
-                        <Typography variant="caption" color="text.secondary">{dayjs(period.from).format('DD/MM/YYYY')} → {dayjs(period.to).format('DD/MM/YYYY')} · {period.subtitle}{period.key === 'thisWeek' && latestAiAssessmentAt ? ` · AI đánh giá ${dayjs(latestAiAssessmentAt).format('DD/MM/YYYY HH:mm')}` : ''}</Typography>
+                        <Typography variant="caption" color="text.secondary">{dayjs(period.from).format('DD/MM/YYYY')} → {dayjs(period.to).format('DD/MM/YYYY')} · {period.subtitle}{financials.roomsMissingCost ? ` · LN tạm tính: ${financials.roomsMissingCost} căn chưa nhập giá vốn` : ''}{period.key === 'thisWeek' && latestAiAssessmentAt ? ` · AI đánh giá ${dayjs(latestAiAssessmentAt).format('DD/MM/YYYY HH:mm')}` : ''}</Typography>
                       </Box>
                       <ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .2s ease' }} />
                     </Box>
@@ -658,7 +782,7 @@ export default function DashboardPage() {
                           <Table size="small" stickyHeader>
                             <TableHead sx={{ backgroundColor: 'var(--bg-primary)', opacity: 1, zIndex: 3, '& .MuiTableCell-root': { backgroundColor: 'var(--bg-primary) !important', opacity: '1 !important', zIndex: 3 } }}>
                               <TableRow sx={{ backgroundColor: 'var(--bg-primary)', opacity: 1 }}>
-                                <TableCell>Căn</TableCell><TableCell>Toà nhà</TableCell><TableCell>Loại phòng</TableCell><TableCell align="right">Đã book / Trống</TableCell><TableCell align="right">Lấp đầy</TableCell><TableCell>Hoàn vốn tháng hiện tại</TableCell><TableCell>Đề xuất giá & đánh giá</TableCell>
+                                <TableCell>Căn</TableCell><TableCell>Toà nhà</TableCell><TableCell>Loại phòng</TableCell><TableCell align="right">Đã book / Trống</TableCell><TableCell align="right">Lấp đầy</TableCell><TableCell>Hoàn vốn tháng hiện tại</TableCell><TableCell>Doanh thu cần hoàn vốn</TableCell><TableCell>Đề xuất giá & đánh giá</TableCell>
                               </TableRow>
                             </TableHead>
                             <TableBody>
@@ -673,13 +797,26 @@ export default function DashboardPage() {
                                 const monthlyCost = currentMonthRoom?.monthlyCost;
                                 const hasCost = monthlyCost !== null && monthlyCost !== undefined && Number(monthlyCost) > 0;
                                 const difference = hasCost ? currentRevenue - Number(monthlyCost) : null;
-                                return <TableRow key={room.roomId} hover>
+                                // Lợi nhuận luôn được tính theo doanh thu và giá vốn của tháng hiện tại,
+                                // bất kể người dùng đang mở báo cáo tuần hay tháng.
+                                const profitRowColor = difference == null || difference === 0
+                                  ? undefined
+                                  : difference > 0
+                                    ? 'rgba(37, 99, 235, 0.14)'
+                                    : 'rgba(220, 38, 38, 0.12)';
+                                return <TableRow key={room.roomId} hover sx={profitRowColor ? {
+                                  backgroundColor: profitRowColor,
+                                  '&:hover': { backgroundColor: profitRowColor },
+                                } : undefined}>
                                   <TableCell><Typography fontWeight={800}>{room.roomNumber}</Typography></TableCell>
                                   <TableCell>{room.building}</TableCell><TableCell>{room.roomType}</TableCell>
                                   <TableCell align="right">{occupied}/{Math.max(0, total - occupied)} đêm</TableCell>
                                   <TableCell align="right"><Chip size="small" color={strategy.color} label={`${Number(room.occupancyRate ?? 0).toFixed(1)}%`} /></TableCell>
                                   <TableCell sx={{ minWidth: 180 }}>
-                                    {hasCost ? <><Typography variant="caption" display="block">DT: {currentRevenue.toLocaleString('vi-VN')}đ</Typography><Typography variant="caption" display="block">GV: {Number(monthlyCost).toLocaleString('vi-VN')}đ</Typography><Typography variant="caption" fontWeight={800} color={difference! >= 0 ? 'success.main' : 'error.main'}>{difference! >= 0 ? `Đã hoàn vốn +${difference!.toLocaleString('vi-VN')}đ` : `Còn thiếu ${Math.abs(difference!).toLocaleString('vi-VN')}đ`}</Typography></> : <Typography variant="caption" color="text.secondary">Chưa nhập giá vốn</Typography>}
+                                    {hasCost ? <><Typography variant="caption" display="block">DT: {currentRevenue.toLocaleString('vi-VN')}đ</Typography><Typography variant="caption" display="block">GV: {Number(monthlyCost).toLocaleString('vi-VN')}đ</Typography><Typography variant="caption" fontWeight={800} color={difference! > 0 ? 'primary.main' : difference! < 0 ? 'error.main' : 'text.secondary'}>{difference! > 0 ? `Đang lãi +${difference!.toLocaleString('vi-VN')}đ` : difference! < 0 ? `Còn thiếu ${Math.abs(difference!).toLocaleString('vi-VN')}đ` : 'Đã hoàn vốn'}</Typography></> : <Typography variant="caption" color="text.secondary">Chưa nhập giá vốn</Typography>}
+                                  </TableCell>
+                                  <TableCell sx={{ minWidth: 150 }}>
+                                    {!hasCost ? <Typography variant="caption" color="text.secondary">Chưa nhập giá vốn</Typography> : difference! > 0 ? <Typography variant="caption" fontWeight={800} color="primary.main">0đ · Đã hoàn vốn</Typography> : <><Typography variant="caption" display="block" color="text.secondary">Cần thêm doanh thu</Typography><Typography variant="body2" fontWeight={800} color={difference! < 0 ? 'error.main' : 'text.secondary'}>{Math.max(0, -difference!).toLocaleString('vi-VN')}đ</Typography></>}
                                   </TableCell>
                                   <TableCell sx={{ minWidth: 350 }}><Stack spacing={0.4}><Stack direction="row" spacing={0.75} alignItems="center"><Chip size="small" color={strategy.color} label={`Cảnh báo · ${strategy.level}`} /><Typography variant="caption" fontWeight={800}>{strategy.action}</Typography></Stack><Typography variant="caption" color="text.secondary">{strategy.text}</Typography>{aiStrategy && aiCampaign.outputSource === 'AI_MODEL' ? <><Stack direction="row" spacing={0.75} alignItems="center"><Chip size="small" color="info" label={`AI đánh giá · ${aiStrategy.phase ?? aiCampaign.status}`} /><Typography variant="caption" fontWeight={800}>{aiStrategy.objective}</Typography></Stack><Typography variant="caption">{aiStrategy.strategy}</Typography><Typography variant="caption" color="info.main">AI đánh giá lúc {dayjs(aiCampaign.outputGeneratedAt ?? aiCampaign.createdAt).format('DD/MM/YYYY HH:mm')} · đánh giá lại sau {aiCampaign.reviewAfterDays} ngày · {aiCampaign.status}</Typography></> : aiCampaign ? <Typography variant="caption" color="warning.main">AI chưa hoàn tất đánh giá cho căn/kỳ này — hệ thống chỉ chạy lại riêng căn này; nội dung mẫu cũ không được dùng là đánh giá AI.</Typography> : <Typography variant="caption" color="text.secondary">Chưa có đánh giá AI cho căn/kỳ này.</Typography>}<Typography variant="caption" color="text.secondary">Chỉ là đề xuất — chưa thay đổi giá trên OTA.</Typography></Stack></TableCell>
                                 </TableRow>;
@@ -830,12 +967,16 @@ export default function DashboardPage() {
             sub="Loại trừ booking import Excel, chỉ tính nguồn chọn trong form đặt phòng"
             icon={<TravelExploreIcon color="primary" fontSize="small" />}
             action={
-              <ToggleButtonGroup value={sourcePeriod} exclusive size="small" onChange={(_, value) => value && setSourcePeriod(value)}>
-                <ToggleButton value="week">Tuần</ToggleButton>
-                <ToggleButton value="month">Tháng</ToggleButton>
-                <ToggleButton value="quarter">Quý</ToggleButton>
-                <ToggleButton value="year">Năm</ToggleButton>
-              </ToggleButtonGroup>
+              <TextField
+                label="Tháng"
+                type="month"
+                size="small"
+                value={sourceMonth}
+                onChange={(event) => event.target.value && setSourceMonth(event.target.value)}
+                InputLabelProps={{ shrink: true }}
+                inputProps={{ 'aria-label': 'Chọn tháng báo cáo nền tảng đặt phòng' }}
+                sx={{ minWidth: 154 }}
+              />
             }
           >
             {isSourceReportLoading || isSourceReportFetching ? (
@@ -873,6 +1014,43 @@ export default function DashboardPage() {
                 ))}
               </Stack>
             )}
+          </SectionCard>
+        </Grid>
+      </Grid>
+
+      <Grid container spacing={2} sx={{ mt: 3 }}>
+        <Grid item xs={12}>
+          <SectionCard
+            title="Khách hàng thân quen"
+            sub="Xếp hạng theo số lần đặt phòng trong kỳ đã chọn; từ 2 lần đặt trở lên được đánh dấu là khách thân quen."
+            icon={<PeopleIcon color="primary" fontSize="small" />}
+          >
+            <Stack spacing={1.5}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ md: 'center' }}>
+                <ToggleButtonGroup size="small" exclusive value={customerReportPeriod} onChange={(_, value: CustomerReportPeriod | null) => {
+                  if (!value) return;
+                  setCustomerReportPeriod(value);
+                  setCustomerReportValue(value === 'day' ? dayjs().format('YYYY-MM-DD') : value === 'month' ? dayjs().format('YYYY-MM') : dayjs().format('YYYY'));
+                }} aria-label="Kỳ báo cáo khách hàng">
+                  <ToggleButton value="day">Ngày</ToggleButton><ToggleButton value="month">Tháng</ToggleButton><ToggleButton value="year">Năm</ToggleButton>
+                </ToggleButtonGroup>
+                <TextField size="small" label={customerReportPeriod === 'day' ? 'Chọn ngày' : customerReportPeriod === 'month' ? 'Chọn tháng' : 'Chọn năm'} type={customerReportPeriod === 'day' ? 'date' : customerReportPeriod === 'month' ? 'month' : 'number'} value={customerReportValue} onChange={(event) => setCustomerReportValue(event.target.value)} inputProps={customerReportPeriod === 'year' ? { min: 2000, max: 2100 } : undefined} sx={{ minWidth: 180 }} />
+              </Stack>
+              {isCustomerReportLoading ? <Box sx={{ py: 3, display: 'flex', justifyContent: 'center' }}><CircularProgress size={24} /></Box> : <>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Chip size="small" color="primary" label={`${customerReportData?.data?.totals?.guests ?? 0} khách đặt phòng`} />
+                  <Chip size="small" color="info" label={`${customerReportData?.data?.totals?.familiarGuests ?? 0} khách thân quen`} />
+                  <Chip size="small" variant="outlined" label={`${customerReportData?.data?.totals?.bookings ?? 0} lượt đặt`} />
+                </Stack>
+                <TableContainer sx={{ maxHeight: 440 }}><Table size="small" stickyHeader>
+                  <TableHead sx={{ '& .MuiTableCell-root': { backgroundColor: 'var(--bg-primary)' } }}><TableRow><TableCell>Khách hàng</TableCell><TableCell align="right">Số lần đặt</TableCell><TableCell align="right">Tổng số đêm</TableCell><TableCell align="right">Doanh thu</TableCell><TableCell align="right">Lần ở gần nhất</TableCell><TableCell>Phân loại</TableCell></TableRow></TableHead>
+                  <TableBody>
+                    {(customerReportData?.data?.customers ?? []).map((customer: any) => <TableRow key={customer.guestId} hover><TableCell><Typography fontWeight={800}>{customer.fullName}</Typography><Typography variant="caption" color="text.secondary">{customer.distinctRooms} căn đã ở</Typography></TableCell><TableCell align="right">{customer.bookings}</TableCell><TableCell align="right">{customer.totalNights} đêm</TableCell><TableCell align="right">{formatCurrency(customer.revenue)}</TableCell><TableCell align="right">{dayjs(customer.lastStay).format('DD/MM/YYYY')}</TableCell><TableCell><Chip size="small" color={customer.familiar ? 'primary' : 'default'} label={customer.familiar ? 'Khách thân quen' : 'Khách mới'} /></TableCell></TableRow>)}
+                    {!customerReportData?.data?.customers?.length && <TableRow><TableCell colSpan={6} align="center"><Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>Chưa có khách đặt phòng trong kỳ này</Typography></TableCell></TableRow>}
+                  </TableBody>
+                </Table></TableContainer>
+              </>}
+            </Stack>
           </SectionCard>
         </Grid>
       </Grid>

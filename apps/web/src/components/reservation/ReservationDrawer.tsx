@@ -4,6 +4,7 @@ import {
   Drawer, Box, Typography, IconButton, Divider, Button, Stack, Chip,
   TextField, Dialog, DialogTitle, DialogContent, DialogActions,
   CircularProgress, Skeleton, MenuItem, InputAdornment,
+  Tooltip,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import LoginIcon from '@mui/icons-material/Login';
@@ -243,11 +244,13 @@ export function ReservationDrawer({ reservationId, onClose }: Props) {
                   onClick={() => handleAction(() => checkIn.mutateAsync({ id: res.id }), 'Check-in thành công!')}
                   disabled={checkIn.isPending}>Check-in</Button>
               )}
-              {canCheckOut && (
-                <Button size="small" variant="contained" color="secondary" startIcon={checkOut.isPending ? <CircularProgress size={14} color="inherit" /> : <LogoutIcon />}
-                  onClick={() => handleAction(() => checkOut.mutateAsync({ id: res.id }), 'Check-out thành công!')}
-                  disabled={checkOut.isPending}>Check-out</Button>
-              )}
+              <Tooltip title={canCheckOut ? 'Ghi nhận giờ check-out thực tế ngay lúc bấm nút.' : 'Check-in trước để mở thao tác check-out.'}>
+                <span>
+                  <Button size="small" variant="contained" color="secondary" startIcon={checkOut.isPending ? <CircularProgress size={14} color="inherit" /> : <LogoutIcon />}
+                    onClick={() => handleAction(() => checkOut.mutateAsync({ id: res.id }), 'Check-out thành công!')}
+                    disabled={!canCheckOut || checkOut.isPending}>Check-out</Button>
+                </span>
+              </Tooltip>
               {canChangeRoom && (
                 <Button size="small" variant="outlined" color="info" startIcon={<SwapHorizIcon />}
                   onClick={() => setChangeRoomDialog(true)}>Đổi phòng</Button>

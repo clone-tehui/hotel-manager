@@ -4,7 +4,7 @@ import { useTheme } from '@mui/material/styles';
 import {
   Box, Button, Typography, FormControl, InputLabel, Select, MenuItem,
   ToggleButton, ToggleButtonGroup, ButtonGroup, Chip, Stack, TextField, Paper, InputAdornment, IconButton,
-  Divider, useMediaQuery,
+  Collapse, Divider, useMediaQuery,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -13,6 +13,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import TodayIcon from '@mui/icons-material/Today';
 import SearchIcon from '@mui/icons-material/Search';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
+import FilterListIcon from '@mui/icons-material/FilterList';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import weekOfYear from 'dayjs/plugin/weekOfYear';
@@ -33,7 +34,9 @@ type ViewMode = 'week' | 'twoWeek' | 'month';
 type TimelineDensity = 'compact' | 'comfortable' | 'spacious';
 type TimelineContrast = 'soft' | 'balanced' | 'strong';
 
-const LEAD_DAYS = 1;
+// Keep the five completed days immediately before the selected date visible,
+// so recent stays and check-outs can be reviewed without navigating back.
+const LEAD_DAYS = 5;
 const TIMELINE_PREFS_KEY = 'timeline_ui_prefs';
 const DEFAULT_CHECKIN_TIME = '14:00';
 const DEFAULT_CHECKOUT_TIME = '12:00';
@@ -42,10 +45,21 @@ const DAY_W:    Record<ViewMode, number>  = { week: 88, twoWeek: 58, month: 38 }
 const VIEW_LABEL: Record<ViewMode, string> = { week: '7 ngày', twoWeek: '2 tuần', month: 'Monthly View' };
 
 const STATUS_OPTIONS = [
-  { key: 'BOOKED',          label: 'Đã đặt',    color: '#2563EB' },
-  { key: 'PENDING_CHECKIN', label: 'Sắp đến',   color: '#2563EB' },
-  { key: 'IN_HOUSE',        label: 'Đang ở',    color: '#DC2626' },
-  { key: 'CHECKED_OUT',     label: 'Đã trả',    color: '#EAB308' },
+  { key: 'BOOKED',          label: 'Đã đặt',    color: '#2585DD' },
+  { key: 'PENDING_CHECKIN', label: 'Chưa đến',  color: '#9926B7' },
+  { key: 'IN_HOUSE',        label: 'Đang ở',    color: '#FF963D' },
+  { key: 'CHECKED_OUT',     label: 'Trả phòng', color: '#E16BE1' },
+];
+
+const TIMELINE_COLOR_LEGEND = [
+  { label: 'Phòng trống', color: '#3FA047' },
+  { label: 'Đã đặt', color: '#2585DD' },
+  { label: 'Chưa đến', color: '#9926B7' },
+  { label: 'Nhận phòng', color: '#E83808' },
+  { label: 'Chưa đi', color: '#FF963D' },
+  { label: 'Trả phòng', color: '#E16BE1' },
+  { label: 'Đã hủy', color: '#8B8B8B' },
+  { label: 'Bẩn', color: '#000000' },
 ];
 
 function buildQuickSearchDefaults(baseDate = dayjs()) {
@@ -74,6 +88,7 @@ function TimelinePageContent() {
   const [contrast, setContrast] = useState<TimelineContrast>('balanced');
   const [showWeekendTint, setShowWeekendTint] = useState(true);
   const [showCurrentTime, setShowCurrentTime] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [roomTypeSearchInput, setRoomTypeSearchInput] = useState('');
   const [searchCheckInInput, setSearchCheckInInput] = useState(() => buildQuickSearchDefaults().checkIn);
   const [searchCheckOutInput, setSearchCheckOutInput] = useState(() => buildQuickSearchDefaults().checkOut);
@@ -115,7 +130,7 @@ function TimelinePageContent() {
   const { data: buildingsData } = useBuildings();
   const buildings: any[] = buildingsData?.data ?? [];
 
-  // Visible date range: include one leading day so bookings from yesterday remain visible
+  // Visible date range: include five leading days for recent stays and check-outs.
   const days = useMemo(() => {
     const count = VIEW_DAYS[viewMode] + LEAD_DAYS;
     const start = anchorDate.subtract(LEAD_DAYS, 'day');
@@ -353,15 +368,50 @@ function TimelinePageContent() {
                   <ToggleButton key={v} value={v}>{VIEW_LABEL[v]}</ToggleButton>
                 ))}
               </ToggleButtonGroup>
+              <Button variant={filtersOpen ? 'contained' : 'outlined'} fullWidth={isMobile} startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((open) => !open)} sx={{ minHeight: { xs: 36, md: 30 }, fontSize: { xs: 13, md: 11.5 }, px: { md: 1.2 }, whiteSpace: 'nowrap' }}>
+                {filtersOpen ? 'Ẩn bộ lọc' : 'Bộ lọc hiển thị'}
+              </Button>
               <Button variant="contained" fullWidth={isMobile} startIcon={<AddIcon />} onClick={() => { setQuickRoom(undefined); setQuickDate(undefined); setQuickCheckInDate(undefined); setQuickCheckOutDate(undefined); setFormOpen(true); }} sx={{ minHeight: { xs: 36, md: 30 }, fontSize: { xs: 13, md: 11.5 }, px: { md: 1.2 } }}>
                 Đặt phòng
               </Button>
             </Stack>
           </Stack>
 
-          <Divider />
+          <Stack spacing={0.45}>
+            <Box sx={{ px: { xs: 0, md: 0.25 }, py: 0.35, display: 'flex', gap: 0.45, flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', '&::-webkit-scrollbar': { display: 'none' } }}>
+              <Chip size="small" label={`${rooms.length} căn`} variant="outlined" sx={{ height: 22, fontSize: 10 }} />
+              <Chip size="small" label={`${filteredReservations.filter(r => r.status === 'BOOKED' || r.status === 'PENDING_CHECKIN').length} sắp đến`} sx={{ bgcolor: 'rgba(108,142,255,0.12)', height: 22, fontSize: 10 }} />
+              <Chip size="small" label={`${filteredReservations.filter(r => r.status === 'IN_HOUSE').length} đang ở`} sx={{ bgcolor: 'rgba(76,175,130,0.12)', height: 22, fontSize: 10 }} />
+              <Chip size="small" label={`${filteredReservations.length} booking`} sx={{ bgcolor: 'action.hover', height: 22, fontSize: 10 }} />
+              <Chip size="small" label={`Từ ${leadDateLabel}`} sx={{ bgcolor: 'rgba(108,142,255,0.10)', height: 22, fontSize: 10 }} />
+            </Box>
+            <Box sx={{ px: { xs: 0, md: 0.25 }, py: 0.35, display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', '&::-webkit-scrollbar': { display: 'none' } }}>
+              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: 10.5, mr: 0.25, whiteSpace: 'nowrap' }}>
+                Chú thích màu:
+              </Typography>
+              {TIMELINE_COLOR_LEGEND.map((status) => (
+                <Chip
+                  key={`legend-${status.label}`}
+                  size="small"
+                  label={status.label}
+                  sx={{
+                    height: 20,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    bgcolor: `${status.color}22`,
+                    color: status.color,
+                    border: `1px solid ${status.color}55`,
+                    '& .MuiChip-label': { px: 0.9 },
+                  }}
+                />
+              ))}
+            </Box>
+          </Stack>
 
-          <Stack direction={{ xs: 'column', xl: 'row' }} spacing={{ xs: 1, md: 0.9 }} alignItems={{ xs: 'stretch', xl: 'flex-start' }}>
+          {filtersOpen && <Divider />}
+
+          <Collapse in={filtersOpen} sx={{ width: '100%' }}>
+            <Stack direction={{ xs: 'column', xl: 'row' }} spacing={{ xs: 1, md: 0.9 }} alignItems={{ xs: 'stretch', xl: 'flex-start' }}>
             <Stack spacing={{ xs: 1, md: 0.65 }} sx={{ flex: 1.15 }}>
               <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: { md: 10.5 } }}>TÌM PHÒNG NHANH</Typography>
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 0.6 }} alignItems={{ xs: 'stretch', md: 'flex-start' }}>
@@ -395,7 +445,7 @@ function TimelinePageContent() {
               </Stack>
             </Stack>
 
-            <Stack spacing={{ xs: 1, md: 0.65 }} sx={{ flex: 0.95 }}>
+              <Stack spacing={{ xs: 1, md: 0.65 }} sx={{ flex: 0.95 }}>
               <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: { md: 10.5 } }}>BỘ LỌC HIỂN THỊ</Typography>
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 0.6 }}>
                 <FormControl size="small" sx={{ flex: 1, '& .MuiInputBase-root': { minHeight: { md: 30 }, fontSize: { md: 12 } }, '& .MuiInputLabel-root': { fontSize: { md: 11.5 } } }}>
@@ -446,8 +496,9 @@ function TimelinePageContent() {
                   Xuất Excel
                 </Button>
               </Stack>
+              </Stack>
             </Stack>
-          </Stack>
+          </Collapse>
         </Stack>
       </Paper>
 
@@ -471,36 +522,6 @@ function TimelinePageContent() {
             onQuickCreate={handleQuickCreate}
           />
         )}
-      </Box>
-
-      <Box sx={{ px: { xs: 1, md: 1.25 }, py: 0.35, borderTop: '1px solid', borderColor: 'divider', display: 'flex', gap: 0.45, bgcolor: 'background.paper', flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', flexShrink: 0, mx: { xs: 0, md: 1 }, borderBottomLeftRadius: { md: 10 }, borderBottomRightRadius: { md: 10 }, '&::-webkit-scrollbar': { display: 'none' } }}>
-        <Chip size="small" label={`${rooms.length} căn`} variant="outlined" sx={{ height: 22, fontSize: 10 }} />
-        <Chip size="small" label={`${filteredReservations.filter(r => r.status === 'BOOKED' || r.status === 'PENDING_CHECKIN').length} sắp đến`} sx={{ bgcolor: 'rgba(108,142,255,0.12)', height: 22, fontSize: 10 }} />
-        <Chip size="small" label={`${filteredReservations.filter(r => r.status === 'IN_HOUSE').length} đang ở`} sx={{ bgcolor: 'rgba(76,175,130,0.12)', height: 22, fontSize: 10 }} />
-        <Chip size="small" label={`${filteredReservations.length} booking`} sx={{ bgcolor: 'action.hover', height: 22, fontSize: 10 }} />
-        <Chip size="small" label={`Từ ${leadDateLabel}`} sx={{ bgcolor: 'rgba(108,142,255,0.10)', height: 22, fontSize: 10 }} />
-      </Box>
-
-      <Box sx={{ px: { xs: 1, md: 1.25 }, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: 'background.paper', flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', flexShrink: 0, mx: { xs: 0, md: 1 }, '&::-webkit-scrollbar': { display: 'none' } }}>
-        <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: 10.5, mr: 0.25 }}>
-          Chú thích màu:
-        </Typography>
-        {STATUS_OPTIONS.map((status) => (
-          <Chip
-            key={`legend-${status.key}`}
-            size="small"
-            label={status.label}
-            sx={{
-              height: 20,
-              fontSize: 10,
-              fontWeight: 700,
-              bgcolor: `${status.color}22`,
-              color: status.color,
-              border: `1px solid ${status.color}55`,
-              '& .MuiChip-label': { px: 0.9 },
-            }}
-          />
-        ))}
       </Box>
 
       <ReservationDrawer reservationId={selectedId} onClose={() => { setSelectedId(null); }} />

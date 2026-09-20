@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { RoomTypesService } from './room-types.service';
 import { CreateRoomTypeDto } from './dto/create-room-type.dto';
@@ -33,4 +33,9 @@ export class RoomTypesController {
   update(@Param('id') id: string, @Body() dto: UpdateRoomTypeDto) {
     return this.service.update(id, dto);
   }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Xóa loại phòng không còn căn sử dụng' })
+  @Roles('ADMIN')
+  remove(@Param('id') id: string) { return this.service.remove(id); }
 }

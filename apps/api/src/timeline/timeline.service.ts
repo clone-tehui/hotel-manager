@@ -67,6 +67,8 @@ export class TimelineService {
         company: true,
         checkInDate: true,
         checkOutDate: true,
+        actualCheckIn: true,
+        actualCheckOut: true,
         status: true,
         adults: true,
         children: true,

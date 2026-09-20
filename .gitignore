@@ -31,6 +31,7 @@ data/
 *.tar.gz
 *.tgz
 *.zip
+apps/api/imports/*.xlsx
 HANDOFF.txt
 
 # Logs/editor/OS

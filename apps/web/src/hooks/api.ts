@@ -152,6 +152,11 @@ export const useUpdateRoomType = () => {
   return useMutation({ mutationFn: ({ id, ...d }: any) => api.patch(`/room-types/${id}`, d), onSuccess: () => qc.invalidateQueries({ queryKey: ['room-types'] }) });
 };
 
+export const useDeleteRoomType = () => {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (id: string) => api.del(`/room-types/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['room-types'] }) });
+};
+
 // ─── Guests ───────────────────────────────────────────────────────────────────
 export const useGuests = (params?: any) =>
   useQuery({ queryKey: ['guests', params], queryFn: () => api.get('/guests', params) });
@@ -234,6 +239,15 @@ export const useDashboardReport = (params?: any, enabled = true) =>
   useQuery({
     queryKey: ['dashboard-report', params],
     queryFn: () => api.get('/dashboard/report', params),
+    enabled: enabled && !!params?.from && !!params?.to,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+export const useDashboardCustomerReport = (params?: any, enabled = true) =>
+  useQuery({
+    queryKey: ['dashboard-customer-report', params],
+    queryFn: () => api.get('/dashboard/customer-report', params),
     enabled: enabled && !!params?.from && !!params?.to,
     staleTime: 30_000,
     refetchOnWindowFocus: false,

@@ -56,6 +56,6 @@ Return valid JSON only with this shape:
   "companyActions":["..."],
   "missingData":["..."]
 }
-CHANNEL CONTRACT (strict): channels is optional. When present, every item MUST be exactly one of the lowercase codes airbnb, zalo, sale, or khac. Do not write channel names such as Facebook, Booking.com, TikTok, OTA, direct, website, Google, or agent. Put any broader marketing explanation in strategy, not channels.
+CHANNEL CONTRACT (strict): channels is optional. When present, every item MUST be exactly one of the lowercase codes airbnb, trip, agoda, booking, zalo, sale, or khac. Do not write channel names such as Facebook, TikTok, OTA, direct, website, Google, or agent. Put any broader marketing explanation in strategy, not channels.
 Only recommend 30-40% when evidence supports a controlled test or profit-phase vacancy. Never recommend a discount below an unknown price floor; flag that as missing data.
 `;

@@ -21,4 +21,10 @@ export class DashboardController {
   getReport(@Query('from') from?: string, @Query('to') to?: string) {
     return this.dashboardService.getReport(from, to);
   }
+
+  @Get('customer-report')
+  @ApiOperation({ summary: 'Báo cáo khách hàng đặt phòng theo khoảng ngày' })
+  getCustomerReport(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.dashboardService.getCustomerReport(from, to);
+  }
 }

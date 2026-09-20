@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRoomTypeDto } from './dto/create-room-type.dto';
 import { UpdateRoomTypeDto } from './dto/update-room-type.dto';
@@ -42,5 +42,18 @@ export class RoomTypesService {
   async update(id: string, dto: UpdateRoomTypeDto) {
     await this.findOne(id);
     return this.prisma.roomType.update({ where: { id }, data: dto });
+  }
+
+  async remove(id: string) {
+    const roomType = await this.prisma.roomType.findUnique({
+      where: { id },
+      include: { _count: { select: { rooms: true } } },
+    });
+    if (!roomType) throw new NotFoundException(`Loại phòng #${id} không tồn tại`);
+    if (roomType._count.rooms > 0) {
+      throw new BadRequestException(`Không thể xóa loại phòng "${roomType.name}" vì còn ${roomType._count.rooms} căn đang sử dụng.`);
+    }
+    await this.prisma.roomType.delete({ where: { id } });
+    return { id, deleted: true };
   }
 }

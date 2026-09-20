@@ -15,7 +15,16 @@ const ACTIVE_BOOKING_STATUSES: ReservationStatus[] = [
   ReservationStatus.PENDING_CHECKIN,
   ReservationStatus.IN_HOUSE,
 ];
-const REPORT_SOURCE_WHITELIST = new Set(['airbnb', 'zalo', 'sale', 'khac']);
+const REPORT_SOURCE_WHITELIST = new Set(['airbnb', 'trip', 'agoda', 'booking', 'zalo', 'sale', 'khac']);
+const ARRIVAL_PLATFORM_LABELS = [
+  { source: 'airbnb', label: 'Airbnb' },
+  { source: 'trip', label: 'Trip.com' },
+  { source: 'agoda', label: 'Agoda' },
+  { source: 'booking', label: 'Booking.com' },
+  { source: 'zalo', label: 'Zalo' },
+  { source: 'sale', label: 'Sale' },
+  { source: 'khac', label: 'Khác' },
+] as const;
 
 type ReservationAnalyticsItem = {
   id: string;
@@ -30,6 +39,7 @@ type ReservationAnalyticsItem = {
   status: ReservationStatus;
   source: string | null;
   room: {
+    id: string;
     number: string;
     building: { code: string; name: string } | null;
     roomType?: { name: string } | null;
@@ -97,10 +107,6 @@ function pctChange(current: number, previous: number) {
   return Number((((current - previous) / previous) * 100).toFixed(1));
 }
 
-function sumReservationRevenue(items: Array<{ totalAmount: any }>) {
-  return items.reduce((sum, item) => sum + toNumber(item.totalAmount), 0);
-}
-
 function startOfUtcDay(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
 }
@@ -121,6 +127,39 @@ function overlapNights(rangeStart: Date, rangeEnd: Date, checkIn: Date, checkOut
   const end = Math.min(rangeEnd.getTime(), normalizedCheckOut);
   if (end <= start) return 0;
   return Math.round((end - start) / MS_PER_DAY);
+}
+
+type RevenueStay = { totalAmount: any; totalNights?: number | null; checkInDate: Date; checkOutDate: Date };
+
+function stayNights(stay: RevenueStay) {
+  const storedNights = Number(stay.totalNights ?? 0);
+  return Number.isFinite(storedNights) && storedNights > 0
+    ? storedNights
+    : nightsBetween(stay.checkInDate, stay.checkOutDate);
+}
+
+// Revenue is recognised per stayed night, rather than all at once on check-in.
+function recognisedRevenue(stay: RevenueStay, rangeStart: Date, rangeEnd: Date) {
+  return (toNumber(stay.totalAmount) / stayNights(stay))
+    * overlapNights(rangeStart, rangeEnd, stay.checkInDate, stay.checkOutDate);
+}
+
+function sumRecognisedRevenue(items: RevenueStay[], rangeStart: Date, rangeEnd: Date) {
+  return items.reduce((sum, item) => sum + recognisedRevenue(item, rangeStart, rangeEnd), 0);
+}
+
+function vnDateKey(date: Date) {
+  const parts = getVnParts(date);
+  return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+function forEachRecognisedNight(stay: RevenueStay, rangeStart: Date, rangeEnd: Date, callback: (dateKey: string, revenue: number) => void) {
+  const start = Math.max(startOfVnDay(stay.checkInDate).getTime(), rangeStart.getTime());
+  const end = Math.min(startOfVnDay(stay.checkOutDate).getTime(), rangeEnd.getTime());
+  const nightlyRevenue = toNumber(stay.totalAmount) / stayNights(stay);
+  for (let cursor = new Date(start); cursor.getTime() < end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    callback(vnDateKey(cursor), nightlyRevenue);
+  }
 }
 
 function parseReportDateParts(input?: string) {
@@ -171,6 +210,7 @@ export class DashboardService {
         where: {
           deletedAt: null,
           status: { in: NON_CANCELLED_STATUSES },
+          room: { is: { status: { not: RoomStatus.MAINTENANCE } } },
           OR: [
             { checkOutDate: { gte: trendStart } },
             { createdAt: { gte: trendStart } },
@@ -185,9 +225,11 @@ export class DashboardService {
           createdAt: true,
           totalAmount: true,
           totalNights: true,
+          adults: true,
+          children: true,
           status: true,
           source: true,
-          room: { select: { number: true, building: { select: { code: true, name: true } } } },
+          room: { select: { id: true, number: true, building: { select: { code: true, name: true } } } },
           guests: { select: { guest: { select: { nationality: true } } } },
         },
         orderBy: { createdAt: 'desc' },
@@ -198,43 +240,107 @@ export class DashboardService {
       this.prisma.guest.count(),
       this.prisma.reservation.findMany({
         take: 8,
-        where: { deletedAt: null },
+        where: { deletedAt: null, room: { is: { status: { not: RoomStatus.MAINTENANCE } } } },
         orderBy: { createdAt: 'desc' },
         include: { room: { select: { number: true, building: { select: { code: true, name: true } } } } },
       }),
     ]);
 
     const activeRooms = rooms.length;
-    const occupiedRooms = rooms.filter((room) => room.status === RoomStatus.OCCUPIED).length;
-    const availableRooms = rooms.filter((room) => room.status === RoomStatus.VACANT).length;
-    const maintenanceRooms = rooms.filter((room) => room.status === RoomStatus.MAINTENANCE).length;
-    const reservedRooms = rooms.filter((room) => room.status === RoomStatus.RESERVED).length;
+    const maintenanceRoomIds = new Set(rooms.filter((room) => room.status === RoomStatus.MAINTENANCE).map((room) => room.id));
+    const occupiedRoomIds = new Set<string>();
+    const reservedRoomIds = new Set<string>();
+    const now = new Date();
+
+    // Room.status is an operational/manual state and can be stale after an
+    // Excel import. The dashboard snapshot must instead reflect the bookings
+    // that are actually active at this moment.
+    reservations.forEach((reservation) => {
+      if (!reservation.room || !ACTIVE_BOOKING_STATUSES.includes(reservation.status)) return;
+      const roomId = reservation.room.id;
+      if (maintenanceRoomIds.has(roomId)) return;
+      if (reservation.checkInDate <= now && reservation.checkOutDate > now) {
+        occupiedRoomIds.add(roomId);
+        reservedRoomIds.delete(roomId);
+      } else if (reservation.checkInDate > now && !occupiedRoomIds.has(roomId)) {
+        reservedRoomIds.add(roomId);
+      }
+    });
+
+    const occupiedRooms = occupiedRoomIds.size;
+    const reservedRooms = Array.from(reservedRoomIds).filter((roomId) => !occupiedRoomIds.has(roomId)).length;
+    const maintenanceRooms = maintenanceRoomIds.size;
+    const reportableRooms = Math.max(0, activeRooms - maintenanceRooms);
+    const availableRooms = Math.max(0, reportableRooms - occupiedRooms - reservedRooms);
     const sourceReportReservations = reservations.filter((reservation) => isReportableSource(reservation.source));
 
-    const arrivalsToday = reservations.filter((reservation) => reservation.checkInDate >= todayRange.start && reservation.checkInDate < todayRange.end).length;
-    const checkoutsToday = reservations.filter((reservation) => reservation.checkOutDate >= todayRange.start && reservation.checkOutDate < todayRange.end).length;
+    const todayArrivals = reservations.filter((reservation) => reservation.checkInDate >= todayRange.start && reservation.checkInDate < todayRange.end);
+    const todayCheckouts = reservations.filter((reservation) => reservation.checkOutDate >= todayRange.start && reservation.checkOutDate < todayRange.end);
+    const arrivalsToday = todayArrivals.length;
+    const checkoutsToday = todayCheckouts.length;
+    const arrivalRoomsToday = new Set(todayArrivals.map((reservation) => reservation.room?.id).filter(Boolean)).size;
+    const checkoutRoomsToday = new Set(todayCheckouts.map((reservation) => reservation.room?.id).filter(Boolean)).size;
+    const dailyMovementByRoom = new Map<string, {
+      roomId: string;
+      roomNumber: string;
+      buildingName: string;
+      buildingCode: string;
+      checkInGuests: string[];
+      checkOutGuests: string[];
+    }>();
+    const addDailyMovement = (reservation: typeof reservations[number], type: 'checkInGuests' | 'checkOutGuests') => {
+      if (!reservation.room?.id) return;
+      const row = dailyMovementByRoom.get(reservation.room.id) ?? {
+        roomId: reservation.room.id,
+        roomNumber: reservation.room.number,
+        buildingName: reservation.room.building?.name ?? '',
+        buildingCode: reservation.room.building?.code ?? '',
+        checkInGuests: [],
+        checkOutGuests: [],
+      };
+      if (!row[type].includes(reservation.primaryGuestName)) row[type].push(reservation.primaryGuestName);
+      dailyMovementByRoom.set(reservation.room.id, row);
+    };
+    todayArrivals.forEach((reservation) => addDailyMovement(reservation, 'checkInGuests'));
+    todayCheckouts.forEach((reservation) => addDailyMovement(reservation, 'checkOutGuests'));
+    const buildingOrder = (movement: { buildingName: string; buildingCode: string }) => {
+      const building = `${movement.buildingName} ${movement.buildingCode}`.toLowerCase();
+      if (building.includes('opera')) return 0;
+      if (building.includes('galleria')) return 1;
+      if (building.includes('crest')) return 2;
+      return 3;
+    };
+    const dailyRoomMovements = Array.from(dailyMovementByRoom.values())
+      .sort((a, b) => buildingOrder(a) - buildingOrder(b)
+        || a.buildingName.localeCompare(b.buildingName, 'vi')
+        || a.roomNumber.localeCompare(b.roomNumber, 'vi', { numeric: true }));
+    const arrivalGuestsToday = todayArrivals.reduce((sum, reservation) => sum + Number(reservation.adults ?? 0) + Number(reservation.children ?? 0), 0);
+    const checkoutGuestsToday = todayCheckouts.reduce((sum, reservation) => sum + Number(reservation.adults ?? 0) + Number(reservation.children ?? 0), 0);
+    const arrivalsTodayBySource = ARRIVAL_PLATFORM_LABELS.map(({ source, label }) => {
+      const bookings = todayArrivals.filter((reservation) => normalizeSource(reservation.source) === source && ['BOOKED', 'PENDING_CHECKIN'].includes(reservation.status)).length;
+      return { source, label, bookings };
+    });
     const inHouseReservations = reservations.filter((reservation) => reservation.status === ReservationStatus.IN_HOUSE);
     const futureActiveReservations = reservations.filter(
       (reservation) => reservation.status !== ReservationStatus.IN_HOUSE && reservation.checkInDate >= todayRange.start,
     );
 
-    const revenueCurrentMonth = sumReservationRevenue(reservations.filter((reservation) => reservation.checkInDate >= currentMonthRange.start && reservation.checkInDate < currentMonthRange.end));
-    const revenuePreviousMonth = sumReservationRevenue(reservations.filter((reservation) => reservation.checkInDate >= previousMonthRange.start && reservation.checkInDate < previousMonthRange.end));
-    const revenueCurrentQuarter = sumReservationRevenue(reservations.filter((reservation) => reservation.checkInDate >= currentQuarterRange.start && reservation.checkInDate < currentQuarterRange.end));
-    const revenuePreviousQuarter = sumReservationRevenue(reservations.filter((reservation) => reservation.checkInDate >= previousQuarterRange.start && reservation.checkInDate < previousQuarterRange.end));
-    const revenueCurrentYear = sumReservationRevenue(reservations.filter((reservation) => reservation.checkInDate >= currentYearRange.start && reservation.checkInDate < currentYearRange.end));
-    const revenuePreviousYear = sumReservationRevenue(reservations.filter((reservation) => reservation.checkInDate >= previousYearRange.start && reservation.checkInDate < previousYearRange.end));
+    const revenueCurrentMonth = sumRecognisedRevenue(reservations, currentMonthRange.start, currentMonthRange.end);
+    const revenuePreviousMonth = sumRecognisedRevenue(reservations, previousMonthRange.start, previousMonthRange.end);
+    const revenueCurrentQuarter = sumRecognisedRevenue(reservations, currentQuarterRange.start, currentQuarterRange.end);
+    const revenuePreviousQuarter = sumRecognisedRevenue(reservations, previousQuarterRange.start, previousQuarterRange.end);
+    const revenueCurrentYear = sumRecognisedRevenue(reservations, currentYearRange.start, currentYearRange.end);
+    const revenuePreviousYear = sumRecognisedRevenue(reservations, previousYearRange.start, previousYearRange.end);
 
     const monthlyRevenueTrend = Array.from({ length: 12 }, (_, index) => {
       const monthDate = vnDate(vnToday.year, vnToday.month, 1, 0, 0, 0);
       monthDate.setUTCMonth(monthDate.getUTCMonth() - (11 - index));
       const parts = getVnParts(monthDate);
       const range = getMonthRangeVn(parts.year, parts.month);
-      const monthReservations = reservations.filter((reservation) => reservation.checkInDate >= range.start && reservation.checkInDate < range.end);
       return {
         label: formatMonthLabel(range.start),
-        revenue: formatCurrency(sumReservationRevenue(monthReservations)),
-        bookings: monthReservations.length,
+        revenue: formatCurrency(sumRecognisedRevenue(reservations, range.start, range.end)),
+        bookings: reservations.filter((reservation) => reservation.checkInDate < range.end && reservation.checkOutDate > range.start).length,
       };
     });
 
@@ -288,7 +394,7 @@ export class DashboardService {
       const buildingName = reservation.room?.building?.name || reservation.room?.building?.code || 'Chưa rõ';
       const current = buildingRevenueMap.get(buildingName) ?? { building: buildingName, bookings: 0, revenue: 0 };
       current.bookings += 1;
-      current.revenue += toNumber(reservation.totalAmount);
+      current.revenue += recognisedRevenue(reservation, trendStart, currentYearRange.end);
       buildingRevenueMap.set(buildingName, current);
     });
     const buildingPerformance = Array.from(buildingRevenueMap.values()).sort((a, b) => b.revenue - a.revenue);
@@ -297,18 +403,18 @@ export class DashboardService {
       ? Number((reservations.reduce((sum, reservation) => sum + (reservation.totalNights ?? 0), 0) / reservations.length).toFixed(1))
       : 0;
     const averageBookingValue = reservations.length
-      ? Math.round(sumReservationRevenue(reservations) / reservations.length)
+      ? Math.round(reservations.reduce((sum, reservation) => sum + toNumber(reservation.totalAmount), 0) / reservations.length)
       : 0;
 
     return {
       generatedAt: new Date().toISOString(),
       rooms: {
-        total: activeRooms,
+        total: reportableRooms,
         occupied: occupiedRooms,
         available: availableRooms,
         maintenance: maintenanceRooms,
         reserved: reservedRooms,
-        occupancyRate: activeRooms ? Number(((occupiedRooms / activeRooms) * 100).toFixed(1)) : 0,
+        occupancyRate: reportableRooms ? Number(((occupiedRooms / reportableRooms) * 100).toFixed(1)) : 0,
       },
       reservations: {
         inHouse: inHouseReservations.length,
@@ -316,6 +422,12 @@ export class DashboardService {
         futureActive: futureActiveReservations.length,
         arrivalsToday,
         checkoutsToday,
+        arrivalRoomsToday,
+        checkoutRoomsToday,
+        dailyRoomMovements,
+        arrivalGuestsToday,
+        checkoutGuestsToday,
+        arrivalsTodayBySource,
       },
       guests: {
         total: totalGuests,
@@ -356,7 +468,7 @@ export class DashboardService {
 
     const [rooms, reservations] = await this.prisma.$transaction([
       this.prisma.room.findMany({
-        where: { isActive: true, deletedAt: null },
+        where: { isActive: true, deletedAt: null, status: { not: RoomStatus.MAINTENANCE } },
         select: {
           id: true,
           number: true,
@@ -371,6 +483,7 @@ export class DashboardService {
         where: {
           deletedAt: null,
           status: { in: NON_CANCELLED_STATUSES },
+          room: { is: { status: { not: RoomStatus.MAINTENANCE } } },
           checkInDate: { lt: rangeEnd },
           checkOutDate: { gt: rangeStart },
         },
@@ -440,19 +553,14 @@ export class DashboardService {
 
     const allReservations = reservations as ReservationAnalyticsItem[];
     const sourceReservations = allReservations.filter((reservation) => isReportableSource(reservation.source));
-    const bookingsInRange = allReservations.filter(
-      (reservation) => reservation.checkInDate >= rangeStart && reservation.checkInDate < rangeEnd,
-    );
     const occupancyReservations = allReservations.filter(
       (reservation) => reservation.checkInDate < rangeEnd && reservation.checkOutDate > rangeStart,
     );
 
-    bookingsInRange.forEach((reservation) => {
-      const revenue = toNumber(reservation.totalAmount);
+    occupancyReservations.forEach((reservation) => {
+      const revenue = recognisedRevenue(reservation, rangeStart, rangeEnd);
       const buildingLabel = reservation.room?.building?.code || reservation.room?.building?.name || 'Chưa rõ';
       const roomTypeLabel = reservation.room?.roomType?.name || 'Chưa rõ';
-      const sourceLabel = reservation.source?.trim() || 'Chưa rõ';
-      const checkInKey = reservation.checkInDate.toISOString().slice(0, 10);
 
       totalRevenue += revenue;
       totalBookingNights += reservation.totalNights ?? nightsBetween(reservation.checkInDate, reservation.checkOutDate);
@@ -468,10 +576,12 @@ export class DashboardService {
       roomTypeRow.revenue += revenue;
       byRoomType.set(roomTypeLabel, roomTypeRow);
 
-      const dayRow = dailyRevenueMap.get(checkInKey) ?? { date: checkInKey, revenue: 0, bookings: 0 };
-      dayRow.revenue += revenue;
-      dayRow.bookings += 1;
-      dailyRevenueMap.set(checkInKey, dayRow);
+      forEachRecognisedNight(reservation, rangeStart, rangeEnd, (dateKey, nightlyRevenue) => {
+        const dayRow = dailyRevenueMap.get(dateKey) ?? { date: dateKey, revenue: 0, bookings: 0 };
+        dayRow.revenue += nightlyRevenue;
+        dayRow.bookings += 1;
+        dailyRevenueMap.set(dateKey, dayRow);
+      });
 
       const room = rooms.find((item) => item.number === reservation.room?.number && item.building?.code === reservation.room?.building?.code);
       if (!room) return;
@@ -483,9 +593,9 @@ export class DashboardService {
     });
 
     sourceReservations
-      .filter((reservation) => reservation.checkInDate >= rangeStart && reservation.checkInDate < rangeEnd)
+      .filter((reservation) => reservation.checkInDate < rangeEnd && reservation.checkOutDate > rangeStart)
       .forEach((reservation) => {
-        const revenue = toNumber(reservation.totalAmount);
+        const revenue = recognisedRevenue(reservation, rangeStart, rangeEnd);
         const sourceLabel = reservation.source?.trim() || 'Chưa rõ';
         const sourceRow = bySource.get(sourceLabel) ?? { label: sourceLabel, bookings: 0, revenue: 0 };
         sourceRow.bookings += 1;
@@ -504,9 +614,9 @@ export class DashboardService {
       const metric = roomMetrics.get(room.id);
       if (!metric) return;
       metric.occupiedNights += occupiedNights;
-      // Sum each booking separately using its manually entered nightly rate.
-      // overlapNights prorates bookings crossing the selected report boundary.
-      metric.bookedNightRevenue += toNumber(reservation.pricePerNight) * occupiedNights;
+      // Keep room-level revenue aligned with the dashboard total: allocate
+      // the booking's final total evenly across its stayed nights.
+      metric.bookedNightRevenue += recognisedRevenue(reservation, rangeStart, rangeEnd);
     });
 
     const totalRoomNights = rooms.length * periodDays;
@@ -568,6 +678,84 @@ export class DashboardService {
         topRoomType: roomTypeBreakdown[0] ?? null,
         topRoom: topRooms[0] ?? null,
       },
+    };
+  }
+
+  async getCustomerReport(from?: string, to?: string) {
+    const parsedFrom = parseReportDateParts(from);
+    const parsedTo = parseReportDateParts(to);
+    if (!parsedFrom || !parsedTo) {
+      throw new BadRequestException('Cần truyền from/to theo định dạng YYYY-MM-DD');
+    }
+
+    const rangeStart = vnDate(parsedFrom.year, parsedFrom.month, parsedFrom.day, 0, 0, 0);
+    const rangeEnd = vnDate(parsedTo.year, parsedTo.month, parsedTo.day + 1, 0, 0, 0);
+    if (rangeEnd <= rangeStart) {
+      throw new BadRequestException('Khoảng ngày không hợp lệ');
+    }
+
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        deletedAt: null,
+        status: { in: NON_CANCELLED_STATUSES },
+        room: { is: { status: { not: RoomStatus.MAINTENANCE } } },
+        checkInDate: { gte: rangeStart, lt: rangeEnd },
+      },
+      select: {
+        totalAmount: true,
+        totalNights: true,
+        checkInDate: true,
+        room: { select: { number: true, building: { select: { code: true, name: true } } } },
+        guests: {
+          where: { isPrimary: true },
+          select: { guest: { select: { id: true, fullName: true } } },
+        },
+      },
+    });
+
+    const customers = new Map<string, { guestId: string; fullName: string; bookings: number; totalNights: number; revenue: number; lastStay: Date; rooms: Set<string> }>();
+    reservations.forEach((reservation) => {
+      const primary = reservation.guests[0]?.guest;
+      if (!primary) return;
+      const row = customers.get(primary.id) ?? {
+        guestId: primary.id,
+        fullName: primary.fullName,
+        bookings: 0,
+        totalNights: 0,
+        revenue: 0,
+        lastStay: reservation.checkInDate,
+        rooms: new Set<string>(),
+      };
+      row.bookings += 1;
+      row.totalNights += reservation.totalNights || nightsBetween(reservation.checkInDate, new Date(reservation.checkInDate.getTime() + MS_PER_DAY));
+      row.revenue += toNumber(reservation.totalAmount);
+      if (reservation.checkInDate > row.lastStay) row.lastStay = reservation.checkInDate;
+      const building = reservation.room?.building?.code || reservation.room?.building?.name || '';
+      row.rooms.add([building, reservation.room?.number].filter(Boolean).join(' '));
+      customers.set(primary.id, row);
+    });
+
+    const customerRows = Array.from(customers.values())
+      .map((row) => ({
+        guestId: row.guestId,
+        fullName: row.fullName,
+        bookings: row.bookings,
+        totalNights: row.totalNights,
+        revenue: Math.round(row.revenue),
+        lastStay: row.lastStay.toISOString(),
+        distinctRooms: row.rooms.size,
+        familiar: row.bookings >= 2,
+      }))
+      .sort((a, b) => b.bookings - a.bookings || b.totalNights - a.totalNights || b.revenue - a.revenue || a.fullName.localeCompare(b.fullName));
+
+    return {
+      range: { from, to },
+      totals: {
+        guests: customerRows.length,
+        familiarGuests: customerRows.filter((row) => row.familiar).length,
+        bookings: reservations.length,
+      },
+      customers: customerRows,
     };
   }
 }
