@@ -263,6 +263,7 @@ export class ReservationsService {
       select: {
         id: true,
         number: true,
+        description: true,
         price: true,
         discountablePrice: true,
         buildingId: true,
@@ -281,6 +282,7 @@ export class ReservationsService {
       roomId: room.id,
       roomCode: room.number,
       roomNumber: room.number,
+      description: room.description ?? '',
       price: room.price,
       discountablePrice: room.discountablePrice,
       building: room.building,
