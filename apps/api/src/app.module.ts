@@ -17,6 +17,9 @@ import { AddonsModule } from './addons/addons.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AiCeoAgentModule } from './ai-ceo-agent/ai-ceo-agent.module';
 import { OtaConnectorsModule } from './ota-connectors/ota-connectors.module';
+import { PublicListingsModule } from './public-listings/public-listings.module';
+import { PricingModule } from './pricing/pricing.module';
+import { ChatbotModule } from './chatbot/chatbot.module';
 
 @Module({
   imports: [
@@ -38,6 +41,9 @@ import { OtaConnectorsModule } from './ota-connectors/ota-connectors.module';
     AddonsModule,
     AiCeoAgentModule,
     OtaConnectorsModule,
+    PublicListingsModule,
+    PricingModule,
+    ChatbotModule,
   ],
 })
 export class AppModule {}

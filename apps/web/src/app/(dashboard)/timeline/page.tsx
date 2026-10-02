@@ -4,7 +4,7 @@ import { useTheme } from '@mui/material/styles';
 import {
   Box, Button, Typography, FormControl, InputLabel, Select, MenuItem,
   ToggleButton, ToggleButtonGroup, ButtonGroup, Chip, Stack, TextField, Paper, InputAdornment, IconButton,
-  Collapse, Divider, useMediaQuery,
+  Collapse, Divider, useMediaQuery, Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -14,6 +14,7 @@ import TodayIcon from '@mui/icons-material/Today';
 import SearchIcon from '@mui/icons-material/Search';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import FilterListIcon from '@mui/icons-material/FilterList';
+import MeetingRoomIcon from '@mui/icons-material/MeetingRoom';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import weekOfYear from 'dayjs/plugin/weekOfYear';
@@ -30,7 +31,7 @@ import { useSearchParams } from 'next/navigation';
 dayjs.locale('vi');
 dayjs.extend(weekOfYear);
 
-type ViewMode = 'week' | 'twoWeek' | 'month';
+type ViewMode = 'day' | 'week' | 'twoWeek' | 'month';
 type TimelineDensity = 'compact' | 'comfortable' | 'spacious';
 type TimelineContrast = 'soft' | 'balanced' | 'strong';
 
@@ -40,27 +41,44 @@ const LEAD_DAYS = 5;
 const TIMELINE_PREFS_KEY = 'timeline_ui_prefs';
 const DEFAULT_CHECKIN_TIME = '14:00';
 const DEFAULT_CHECKOUT_TIME = '12:00';
-const VIEW_DAYS: Record<ViewMode, number> = { week: 7, twoWeek: 14, month: 31 };
-const DAY_W:    Record<ViewMode, number>  = { week: 88, twoWeek: 58, month: 38 };
-const VIEW_LABEL: Record<ViewMode, string> = { week: '7 ngày', twoWeek: '2 tuần', month: 'Monthly View' };
+const VIEW_DAYS: Record<ViewMode, number> = { day: 1, week: 7, twoWeek: 14, month: 31 };
+const DAY_W:    Record<ViewMode, number>  = { day: 140, week: 88, twoWeek: 58, month: 38 };
+const VIEW_LABEL: Record<ViewMode, string> = { day: '1 ngày', week: '7 ngày', twoWeek: '2 tuần', month: 'Monthly View' };
 
 const STATUS_OPTIONS = [
-  { key: 'BOOKED',          label: 'Đã đặt',    color: '#2585DD' },
-  { key: 'PENDING_CHECKIN', label: 'Chưa đến',  color: '#9926B7' },
-  { key: 'IN_HOUSE',        label: 'Đang ở',    color: '#FF963D' },
-  { key: 'CHECKED_OUT',     label: 'Trả phòng', color: '#E16BE1' },
+  { key: 'BOOKED',          label: 'Chưa ở',          color: '#2585DD' },
+  { key: 'PENDING_CHECKIN', label: 'Chưa check-in',   color: '#2585DD' },
+  { key: 'IN_HOUSE',        label: 'Đang ở',          color: '#E53935' },
+  { key: 'CHECKED_OUT',     label: 'Đã trả phòng',    color: '#E16BE1' },
 ];
 
 const TIMELINE_COLOR_LEGEND = [
-  { label: 'Phòng trống', color: '#3FA047' },
-  { label: 'Đã đặt', color: '#2585DD' },
-  { label: 'Chưa đến', color: '#9926B7' },
-  { label: 'Nhận phòng', color: '#E83808' },
-  { label: 'Chưa đi', color: '#FF963D' },
-  { label: 'Trả phòng', color: '#E16BE1' },
-  { label: 'Đã hủy', color: '#8B8B8B' },
-  { label: 'Bẩn', color: '#000000' },
+  { label: 'Khách chưa ở', color: '#2585DD' },
+  { label: 'Đang ở', color: '#E53935' },
+  { label: 'Quá giờ chưa checkout', color: '#FF963D' },
+  { label: 'Đã trả phòng', color: '#E16BE1' },
 ];
+
+const ACTIVE_SOURCE_LABELS: Record<string, string> = {
+  airbnb: 'Airbnb',
+  trip: 'Trip.com',
+  agoda: 'Agoda',
+  booking: 'Booking.com',
+  zalo: 'Zalo',
+  sale: 'Sale',
+  khac: 'Khác',
+};
+
+function normalizeActiveSource(value: unknown) {
+  const source = String(value ?? '').trim().toLowerCase();
+  if (source.includes('airbnb')) return 'airbnb';
+  if (source.includes('trip')) return 'trip';
+  if (source.includes('agoda')) return 'agoda';
+  if (source.includes('booking') || source.includes('bking')) return 'booking';
+  if (source.includes('zalo')) return 'zalo';
+  if (source.includes('sale')) return 'sale';
+  return 'khac';
+}
 
 function buildQuickSearchDefaults(baseDate = dayjs()) {
   return {
@@ -89,6 +107,8 @@ function TimelinePageContent() {
   const [showWeekendTint, setShowWeekendTint] = useState(true);
   const [showCurrentTime, setShowCurrentTime] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [activeSourceDialog, setActiveSourceDialog] = useState<string | null>(null);
+  const [vacancyOpen, setVacancyOpen] = useState(false);
   const [roomTypeSearchInput, setRoomTypeSearchInput] = useState('');
   const [searchCheckInInput, setSearchCheckInInput] = useState(() => buildQuickSearchDefaults().checkIn);
   const [searchCheckOutInput, setSearchCheckOutInput] = useState(() => buildQuickSearchDefaults().checkOut);
@@ -140,7 +160,7 @@ function TimelinePageContent() {
   const dayWidth = DAY_W[viewMode];
 
   const navigate = (dir: -1 | 1) => {
-    const unit = viewMode === 'month' ? 14 : viewMode === 'twoWeek' ? 7 : 7;
+    const unit = viewMode === 'month' ? 14 : viewMode === 'twoWeek' ? 7 : viewMode === 'day' ? 1 : 7;
     setAnchorDate(anchorDate.add(dir * unit, 'day'));
   };
 
@@ -202,6 +222,98 @@ function TimelinePageContent() {
     refetchOnWindowFocus: false,
     placeholderData: keepPreviousData,
   });
+  // This uses the existing reservation list endpoint only; no API changes are needed.
+  const { data: activeStaysData } = useQuery({
+    queryKey: ['timeline-active-stays', buildingFilter],
+    // The existing endpoint caps page size at 500; the active-stay list is
+    // well below that and using its maximum prevents a validation error.
+    queryFn: () => api.get('/reservations', { status: 'IN_HOUSE', limit: 500 }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: keepPreviousData,
+  });
+  const activeStaysRaw: any[] = activeStaysData?.data?.data ?? activeStaysData?.data ?? [];
+  const todayKey = dayjs().format('YYYY-MM-DD');
+  const { data: bookedArrivalsData } = useQuery({
+    queryKey: ['timeline-booked-arrivals', buildingFilter],
+    queryFn: () => api.get('/reservations', { status: 'BOOKED', limit: 500 }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: keepPreviousData,
+  });
+  // The booking list can exceed the API's 500-item page cap. Load page two as
+  // well so today's arrivals are never hidden simply because they are older
+  // than the first page's update order.
+  const { data: bookedArrivalsPageTwoData } = useQuery({
+    queryKey: ['timeline-booked-arrivals', buildingFilter, 2],
+    queryFn: () => api.get('/reservations', { status: 'BOOKED', page: 2, limit: 500 }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: keepPreviousData,
+  });
+  const { data: pendingCheckInData } = useQuery({
+    queryKey: ['timeline-pending-checkin-arrivals', buildingFilter],
+    queryFn: () => api.get('/reservations', { status: 'PENDING_CHECKIN', limit: 500 }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: keepPreviousData,
+  });
+  const todayArrivalsRaw: any[] = [
+    ...(bookedArrivalsData?.data?.data ?? bookedArrivalsData?.data ?? []),
+    ...(bookedArrivalsPageTwoData?.data?.data ?? bookedArrivalsPageTwoData?.data ?? []),
+    ...(pendingCheckInData?.data?.data ?? pendingCheckInData?.data ?? []),
+  ];
+  const activeStaysBySource = useMemo(() => {
+    const now = dayjs();
+    const bySource = new Map<string, any[]>();
+    const currentStays = activeStaysRaw
+      .filter((stay) => {
+        if (buildingFilter && stay.room?.buildingId !== buildingFilter) return false;
+        // A stale IN_HOUSE record whose scheduled checkout has already passed
+        // must not hide the new guest arriving in the same apartment today.
+        return dayjs(stay.checkInDate).isBefore(now) && dayjs(stay.checkOutDate).isAfter(now);
+      })
+      .map((stay) => ({ ...stay, isUncheckedArrival: false }));
+    const uncheckedArrivals = todayArrivalsRaw
+      .filter((stay) => {
+        if (buildingFilter && stay.room?.buildingId !== buildingFilter) return false;
+        return (stay.status === 'BOOKED' || stay.status === 'PENDING_CHECKIN')
+          && dayjs(stay.checkInDate).format('YYYY-MM-DD') === todayKey;
+      })
+      .map((stay) => ({ ...stay, isUncheckedArrival: true }));
+
+    // Keep both records when a room has a guest leaving and another guest
+    // arriving today.  Deduplicating by room hid the new Trip.com arrival
+    // behind the guest who is still checked in until checkout time.
+    [...currentStays, ...uncheckedArrivals].forEach((stay) => {
+      const key = normalizeActiveSource(stay.source);
+      bySource.set(key, [...(bySource.get(key) ?? []), stay]);
+    });
+    return bySource;
+  }, [activeStaysRaw, todayArrivalsRaw, buildingFilter, todayKey]);
+  const activeStayTotal = useMemo(() => {
+    // The headline is a number of apartments, while platform dialogs retain
+    // every relevant booking (including same-day checkout/check-in turnovers).
+    const roomKeys = new Set(
+      Array.from(activeStaysBySource.values())
+        .flat()
+        .map((stay) => stay.roomId ?? stay.room?.id ?? stay.id),
+    );
+    return roomKeys.size;
+  }, [activeStaysBySource]);
+  const activeStayDialogItems = useMemo(() => {
+    const stays = activeSourceDialog === 'all'
+      ? Array.from(activeStaysBySource.values()).flat()
+      : activeStaysBySource.get(activeSourceDialog ?? '') ?? [];
+    return stays.sort((a, b) => {
+      const arrivalFirst = Number(b.isUncheckedArrival) - Number(a.isUncheckedArrival);
+      return arrivalFirst || String(a.room?.number ?? '').localeCompare(String(b.room?.number ?? ''), 'vi', { numeric: true });
+    });
+  }, [activeSourceDialog, activeStaysBySource]);
   // API returns {ok, data:[...]} → extract array
   const reservations: any[] = useMemo(() => {
     const raw = timelineData;
@@ -280,6 +392,21 @@ function TimelinePageContent() {
     if (Array.isArray(raw?.data)) return raw.data;
     return [];
   }, [quickSearchData]);
+
+  const vacancyParams = useMemo(() => ({
+    date: anchorDate.format('YYYY-MM-DD'),
+    ...(buildingFilter ? { buildingId: buildingFilter } : {}),
+  }), [anchorDate, buildingFilter]);
+  const { data: vacancyData, isFetching: vacancyLoading } = useQuery({
+    queryKey: ['vacant-rooms-from-date', vacancyParams],
+    queryFn: () => api.get('/reservations/vacant-today', vacancyParams),
+    enabled: vacancyOpen,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+    placeholderData: keepPreviousData,
+  });
+  const vacancyReport = vacancyData?.data ?? vacancyData;
+  const vacantRooms: any[] = Array.isArray(vacancyReport?.rooms) ? vacancyReport.rooms : [];
 
   const handleQuickSearchPick = (room: any) => {
     const targetDate = appliedQuickSearch?.checkIn ? dayjs(appliedQuickSearch.checkIn).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
@@ -377,7 +504,7 @@ function TimelinePageContent() {
             </Stack>
           </Stack>
 
-          <Stack spacing={0.45}>
+          <Box>
             <Box sx={{ px: { xs: 0, md: 0.25 }, py: 0.35, display: 'flex', gap: 0.45, flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', '&::-webkit-scrollbar': { display: 'none' } }}>
               <Chip size="small" label={`${rooms.length} căn`} variant="outlined" sx={{ height: 22, fontSize: 10 }} />
               <Chip size="small" label={`${filteredReservations.filter(r => r.status === 'BOOKED' || r.status === 'PENDING_CHECKIN').length} sắp đến`} sx={{ bgcolor: 'rgba(108,142,255,0.12)', height: 22, fontSize: 10 }} />
@@ -385,35 +512,49 @@ function TimelinePageContent() {
               <Chip size="small" label={`${filteredReservations.length} booking`} sx={{ bgcolor: 'action.hover', height: 22, fontSize: 10 }} />
               <Chip size="small" label={`Từ ${leadDateLabel}`} sx={{ bgcolor: 'rgba(108,142,255,0.10)', height: 22, fontSize: 10 }} />
             </Box>
-            <Box sx={{ px: { xs: 0, md: 0.25 }, py: 0.35, display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', '&::-webkit-scrollbar': { display: 'none' } }}>
-              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: 10.5, mr: 0.25, whiteSpace: 'nowrap' }}>
-                Chú thích màu:
-              </Typography>
-              {TIMELINE_COLOR_LEGEND.map((status) => (
-                <Chip
-                  key={`legend-${status.label}`}
-                  size="small"
-                  label={status.label}
-                  sx={{
-                    height: 20,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    bgcolor: `${status.color}22`,
-                    color: status.color,
-                    border: `1px solid ${status.color}55`,
-                    '& .MuiChip-label': { px: 0.9 },
-                  }}
-                />
-              ))}
+            <Box sx={{ px: { xs: 0, md: 0.25 }, pb: 0.35, display: 'flex', gap: 0.45, alignItems: 'center', flexWrap: isMobile ? 'nowrap' : 'wrap', overflowX: isMobile ? 'auto' : 'visible', '&::-webkit-scrollbar': { display: 'none' } }}>
+              <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ whiteSpace: 'nowrap', fontSize: 10.5 }}>Căn đang có khách hôm nay:</Typography>
+              <Chip size="small" color="success" clickable label={`${activeStayTotal} căn`} onClick={() => setActiveSourceDialog('all')} sx={{ height: 22, fontSize: 10, fontWeight: 800 }} />
+              {Object.entries(ACTIVE_SOURCE_LABELS).map(([key, label]) => {
+                const rooms = activeStaysBySource.get(key)?.length ?? 0;
+                return rooms > 0 ? <Chip key={key} size="small" clickable label={`${label}: ${rooms}`} variant="outlined" onClick={() => setActiveSourceDialog(key)} sx={{ height: 22, fontSize: 10, fontWeight: 700 }} /> : null;
+              })}
             </Box>
-          </Stack>
+          </Box>
+
+          <Dialog open={!!activeSourceDialog} onClose={() => setActiveSourceDialog(null)} fullWidth maxWidth="sm">
+            <DialogTitle sx={{ pb: 0.75 }}>
+              {activeSourceDialog === 'all' ? 'Các căn có khách / sẽ check-in hôm nay' : `Khách đang ở hoặc sẽ đến — ${ACTIVE_SOURCE_LABELS[activeSourceDialog ?? ''] ?? 'Khác'}`}
+            </DialogTitle>
+            <DialogContent dividers sx={{ py: 0 }}>
+              {activeStayDialogItems.length === 0 ? (
+                <Typography color="text.secondary" sx={{ py: 2 }}>Chưa có dữ liệu chi tiết cho nhóm này.</Typography>
+              ) : activeStayDialogItems.map((stay) => (
+                <Box key={stay.id} sx={{ display: 'flex', gap: 1.25, alignItems: 'center', py: 1.15, borderBottom: '1px solid', borderColor: 'divider' }}>
+                  <Chip label={stay.room?.number ?? '—'} size="small" color="primary" sx={{ minWidth: 72, fontWeight: 800 }} />
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography fontWeight={700}>{stay.primaryGuestName || 'Chưa có tên khách'}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {ACTIVE_SOURCE_LABELS[normalizeActiveSource(stay.source)]} · {stay.isUncheckedArrival ? 'Chưa check-in hôm nay' : 'Đang ở'} · Check-in {dayjs(stay.checkInDate).format('DD/MM/YYYY')} · Check-out {dayjs(stay.checkOutDate).format('DD/MM/YYYY')}
+                    </Typography>
+                  </Box>
+                </Box>
+              ))}
+            </DialogContent>
+            <DialogActions><Button onClick={() => setActiveSourceDialog(null)}>Đóng</Button></DialogActions>
+          </Dialog>
 
           {filtersOpen && <Divider />}
 
           <Collapse in={filtersOpen} sx={{ width: '100%' }}>
             <Stack direction={{ xs: 'column', xl: 'row' }} spacing={{ xs: 1, md: 0.9 }} alignItems={{ xs: 'stretch', xl: 'flex-start' }}>
             <Stack spacing={{ xs: 1, md: 0.65 }} sx={{ flex: 1.15 }}>
-              <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: { md: 10.5 } }}>TÌM PHÒNG NHANH</Typography>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ fontSize: { md: 10.5 } }}>TÌM PHÒNG NHANH</Typography>
+                <Button size="small" variant={vacancyOpen ? 'contained' : 'outlined'} color="success" startIcon={<MeetingRoomIcon />} onClick={() => setVacancyOpen((open) => !open)} sx={{ minHeight: { md: 26 }, fontSize: { md: 10.5 }, px: { md: 0.9 }, whiteSpace: 'nowrap' }}>
+                  {vacancyOpen ? 'Ẩn căn trống' : `Căn trống ${anchorDate.format('DD/MM')}`}
+                </Button>
+              </Stack>
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 0.6 }} alignItems={{ xs: 'stretch', md: 'flex-start' }}>
                 <FormControl size="small" sx={{ flex: { xs: '1 1 auto', md: '1.2 1 0' }, minWidth: { md: 170 }, '& .MuiInputBase-root': { minHeight: { md: 30 }, fontSize: { md: 12 } }, '& .MuiInputLabel-root': { fontSize: { md: 11.5 } } }}>
                   <InputLabel>Loại phòng</InputLabel>
@@ -428,7 +569,12 @@ function TimelinePageContent() {
                 <TextField size="small" type="datetime-local" label="Check-out" value={searchCheckOutInput} onChange={(e) => setSearchCheckOutInput(e.target.value)} inputRef={quickCheckOutRef} InputLabelProps={{ shrink: true }} sx={{ flex: { xs: '1 1 auto', md: '0.92 1 0' }, minWidth: { md: 150 }, '& .MuiInputBase-root': { minHeight: { md: 30 }, fontSize: { md: 12 } }, '& .MuiInputLabel-root': { fontSize: { md: 11.5 } } }} />
                 <Button variant="contained" startIcon={<SearchIcon />} onClick={handleQuickRoomSearch} sx={{ minWidth: { md: 105 }, whiteSpace: 'nowrap', alignSelf: { xs: 'stretch', md: 'auto' }, minHeight: { md: 30 }, fontSize: { md: 11.5 }, px: { md: 1 } }}>Tìm phòng</Button>
               </Stack>
-              <Stack direction="row" flexWrap={isMobile ? 'nowrap' : 'wrap'} gap={0.5} sx={{ overflowX: isMobile ? 'auto' : 'visible', pb: isMobile ? 0.25 : 0, '&::-webkit-scrollbar': { display: 'none' } }}>
+              <Stack
+                direction="row"
+                flexWrap="wrap"
+                gap={0.5}
+                sx={{ width: '100%', overflow: 'visible' }}
+              >
                 {quickSearchLoading && <Chip label="Đang tìm phòng phù hợp..." color="info" variant="outlined" />}
                 {appliedQuickSearch && !quickSearchLoading && quickSearchResults.length === 0 && <Chip label="Không có phòng phù hợp" color="warning" variant="outlined" />}
                 {quickSearchResults.map((room: any) => (
@@ -438,11 +584,62 @@ function TimelinePageContent() {
                     color="primary"
                     variant="outlined"
                     onClick={() => handleQuickSearchPick(room)}
-                    label={`${room.roomNumber} · ${room.building?.code ?? '—'}${room.roomType?.name ? ` · ${room.roomType.name}` : ''}`}
-                    sx={{ maxWidth: '100%', height: { md: 24 }, fontSize: { md: 11 }, '& .MuiChip-label': { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                    label={`${room.roomNumber}${room.floor ? ` · T${room.floor}` : ''} · ${room.building?.code ?? '—'}${room.roomType?.name ? ` · ${room.roomType.name}` : ''}`}
+                    sx={{
+                      maxWidth: '100%',
+                      height: { md: 24 },
+                      fontSize: { md: 11 },
+                      // On phones, make each result a complete row instead of a
+                      // horizontally scrollable strip of truncated chips.
+                      flex: { xs: '1 1 100%', sm: '0 1 auto' },
+                      justifyContent: { xs: 'flex-start', sm: 'center' },
+                      '& .MuiChip-label': {
+                        display: 'block',
+                        overflow: { xs: 'visible', sm: 'hidden' },
+                        textOverflow: { xs: 'clip', sm: 'ellipsis' },
+                        whiteSpace: 'normal',
+                      },
+                    }}
                   />
                 ))}
               </Stack>
+              <Collapse in={vacancyOpen}>
+                <Paper variant="outlined" sx={{ borderRadius: 1.5, overflow: 'hidden', mt: 0.25 }}>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.1, py: 0.7, bgcolor: 'action.hover', borderBottom: '1px solid', borderColor: 'divider' }}>
+                    <Stack direction="row" spacing={0.7} alignItems="center">
+                      <MeetingRoomIcon color="success" sx={{ fontSize: 17 }} />
+                      <Typography fontWeight={800} sx={{ fontSize: { xs: 13, md: 12.5 } }}>Căn trống từ {anchorDate.format('DD/MM/YYYY')}</Typography>
+                    </Stack>
+                    <Chip size="small" color="success" label={`${vacancyReport?.total ?? 0} căn trống`} sx={{ height: 22, fontWeight: 800, fontSize: 10.5 }} />
+                  </Stack>
+                  {vacancyLoading ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 1.25 }}>Đang kiểm tra lịch trống…</Typography>
+                  ) : vacantRooms.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ p: 1.25 }}>Không có căn trống trong ngày đã chọn.</Typography>
+                  ) : (
+                    <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>
+                      {vacantRooms.map((room: any, index) => (
+                        <Stack key={room.roomId} direction="row" alignItems="center" justifyContent="space-between" gap={1} sx={{ px: 1.1, py: 0.85, borderBottom: index === vacantRooms.length - 1 ? 0 : '1px solid', borderColor: 'divider' }}>
+                          <Stack direction="row" spacing={0.9} alignItems="center" minWidth={0}>
+                            <Box sx={{ width: 9, height: 9, bgcolor: '#3FA047', borderRadius: '50%', flexShrink: 0 }} />
+                            <Box minWidth={0}>
+                              <Stack direction="row" spacing={0.6} alignItems="center">
+                                <Typography fontWeight={800} sx={{ fontSize: { xs: 15, md: 14.5 }, lineHeight: 1.15 }}>{room.roomNumber}</Typography>
+                                {room.floor ? <Chip size="small" label={`T${room.floor}`} sx={{ height: 17, fontSize: 9, fontWeight: 700 }} /> : null}
+                              </Stack>
+                              <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', fontSize: { xs: 11, md: 10.5 } }}>{room.building?.name ?? room.building?.code ?? '—'} · {room.roomType?.name ?? '—'}</Typography>
+                            </Box>
+                          </Stack>
+                          <Box textAlign="right" flexShrink={0}>
+                            <Typography fontWeight={800} color="success.main" sx={{ fontSize: { xs: 12, md: 11.5 }, lineHeight: 1.15 }}>Trống {dayjs(room.vacantFrom).format('DD/MM')} → {room.vacantUntil ? dayjs(room.vacantUntil).format('DD/MM') : 'chưa có lịch tiếp'}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: { xs: 10.5, md: 10 } }}>{room.freeNights === null ? 'Chưa có booking tiếp theo' : `${room.freeNights} đêm trống`}</Typography>
+                          </Box>
+                        </Stack>
+                      ))}
+                    </Box>
+                  )}
+                </Paper>
+              </Collapse>
             </Stack>
 
               <Stack spacing={{ xs: 1, md: 0.65 }} sx={{ flex: 0.95 }}>

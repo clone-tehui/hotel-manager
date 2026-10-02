@@ -164,6 +164,7 @@ model RoomType {
   amenities   String[]
   isActive    Boolean  @default(true)
   rooms       Room[]
+  stayDiscountRules RoomTypeStayDiscountRule[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -192,6 +193,7 @@ model Room {
   updatedAt         DateTime   @updatedAt
 
   reservations   Reservation[]
+  holds          RoomHold[]
   images         RoomImage[]
   addonOverrides RoomAddonProductOverride[]
   addonOrders    AddonOrder[]
@@ -201,6 +203,19 @@ model Room {
   @@index([roomTypeId, isActive, deletedAt])
   @@index([status, isActive, deletedAt])
   @@map("rooms")
+}
+
+// Public listing text/prices only; never changes internal room pricing or reservations.
+model PublicListingOverride {
+  key          String   @id
+  nightlyPrice Int?
+  area         String?
+  features     String?
+  note         String?
+  coverImage   String?
+  updatedAt    DateTime @updatedAt
+
+  @@map("public_listing_overrides")
 }
 
 // ── Guests ────────────────────────────────────────────────────────────────────
@@ -258,6 +273,9 @@ model Reservation {
   adults           Int               @default(1)
   children         Int               @default(0)
   ratePlanName     String?
+  /// Fixed calendar-month price for a long-term lease. When set, dashboard
+  /// revenue is recognised by each month's actual number of nights.
+  monthlyRate      Decimal?          @db.Decimal(15, 2)
   pricePerNight    Decimal           @db.Decimal(12, 2)
   totalNights      Int
   totalAmount      Decimal           @db.Decimal(12, 2)
@@ -376,7 +394,92 @@ model ApiKey {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  holds RoomHold[]
+  chatbotIdempotencies ChatbotIdempotency[]
+
   @@map("api_keys")
+}
+
+enum StayDurationUnit {
+  DAY
+  MONTH
+  YEAR
+}
+
+enum RoomHoldStatus {
+  ACTIVE
+  CONVERTED
+  RELEASED
+  EXPIRED
+}
+
+model RoomHold {
+  id String @id @default(cuid())
+  roomId String
+  room Room @relation(fields: [roomId], references: [id])
+  apiKeyId String
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+  checkInDate DateTime
+  checkOutDate DateTime
+  status RoomHoldStatus @default(ACTIVE)
+  discountRequested Boolean @default(false)
+  basePricePerNightSnapshot Decimal @db.Decimal(12, 2)
+  discountRuleIdSnapshot String?
+  discountPerNightSnapshot Decimal @db.Decimal(12, 2)
+  finalPricePerNightSnapshot Decimal @db.Decimal(12, 2)
+  totalNightsSnapshot Int
+  totalDiscountSnapshot Decimal @db.Decimal(12, 2)
+  totalAmountSnapshot Decimal @db.Decimal(12, 2)
+  customerRef String?
+  conversationRef String?
+  channelType String?
+  externalThreadId String?
+  expiresAt DateTime
+  releasedAt DateTime?
+  convertedAt DateTime?
+  reservationId String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roomId, status, expiresAt, checkInDate, checkOutDate])
+  @@index([apiKeyId, id])
+  @@map("room_holds")
+}
+
+model ChatbotIdempotency {
+  id String @id @default(cuid())
+  apiKeyId String
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id])
+  key String
+  operation String
+  requestHash String
+  responseJson Json
+  status String @default("COMPLETED")
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@unique([apiKeyId, operation, key])
+  @@index([expiresAt])
+  @@map("chatbot_idempotencies")
+}
+
+model RoomTypeStayDiscountRule {
+  id String @id @default(cuid())
+  roomTypeId String
+  roomType RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  minValue Int
+  minUnit StayDurationUnit
+  maxValue Int?
+  maxUnit StayDurationUnit?
+  minNights Int
+  maxNights Int?
+  discountPerNight Decimal @db.Decimal(12, 2)
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roomTypeId, isActive, minNights, maxNights])
+  @@map("room_type_stay_discount_rules")
 }
 
 // ── System Settings ───────────────────────────────────────────────────────────

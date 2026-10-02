@@ -12,6 +12,8 @@
     "db:migrate": "prisma migrate dev --name init",
     "db:seed": "ts-node prisma/seed.ts",
     "db:studio": "prisma studio",
+    "test:pricing": "ts-node src/pricing/pricing.test.ts",
+    "test:chatbot-integration": "ts-node src/chatbot/chatbot.integration.test.ts",
     "test:business-truth": "ts-node src/dashboard/business-truth.test.ts",
     "test:agent-runtime": "ts-node src/ai-ceo-agent/runtime/agent-runtime.test.ts",
     "test:cost-controls": "ts-node src/ai-ceo-agent/runtime/cost-controls.test.ts",

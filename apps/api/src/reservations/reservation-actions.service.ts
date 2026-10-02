@@ -8,6 +8,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ReservationStatus, RoomStatus } from '@prisma/client';
 import axios from 'axios';
+import { InventoryLockService } from '../pricing/inventory-lock.service';
+import { Prisma } from '@prisma/client';
 import { CancelReservationDto } from './dto/cancel-reservation.dto';
 import { AssignRoomDto } from './dto/assign-room.dto';
 import { ChangeRoomDto } from './dto/change-room.dto';
@@ -113,7 +115,7 @@ async function postBookingWebhook(url: string, payload: any) {
 export class ReservationActionsService {
   private readonly logger = new Logger(ReservationActionsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private readonly inventory: InventoryLockService) {}
 
   private withFormattedDates<T extends { checkInDate?: string | Date | null; checkOutDate?: string | Date | null }>(reservation: T): T & {
     checkInDateFormatted: string | null;
@@ -139,8 +141,8 @@ export class ReservationActionsService {
 
   // ─────────────────────────── Private helpers ───────────────────────────────
 
-  private async getOrThrow(id: string) {
-    const res = await this.prisma.reservation.findUnique({ where: { id }, include: INCLUDE });
+  private async getOrThrow(id: string, database: Prisma.TransactionClient | PrismaService = this.prisma) {
+    const res = await database.reservation.findUnique({ where: { id }, include: INCLUDE });
     if (!res) throw new NotFoundException(`Đặt phòng #${id} không tồn tại`);
     return res;
   }
@@ -151,10 +153,13 @@ export class ReservationActionsService {
     checkIn: Date,
     checkOut: Date,
     excludeId?: string,
+    database: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
-    const hit = await this.prisma.reservation.findFirst({
+    await this.inventory.assertNoHold(database as Prisma.TransactionClient, roomId, checkIn, checkOut);
+    const hit = await database.reservation.findFirst({
       where: {
         roomId,
+        deletedAt: null,
         status: { in: ACTIVE },
         id: excludeId ? { not: excludeId } : undefined,
         AND: [
@@ -173,12 +178,25 @@ export class ReservationActionsService {
   }
 
   /** Loads a room and throws if not found or under maintenance */
-  private async assertRoomUsable(roomId: string) {
-    const room = await this.prisma.room.findUnique({ where: { id: roomId } });
+  private async assertRoomUsable(roomId: string, database: Prisma.TransactionClient | PrismaService = this.prisma) {
+    const room = await database.room.findUnique({ where: { id: roomId } });
     if (!room || !room.isActive) throw new NotFoundException('Phòng không tồn tại');
     if (room.status === RoomStatus.MAINTENANCE) {
       throw new BadRequestException(`Phòng ${room.number} đang bảo trì, không thể sử dụng`);
     }
+    return room;
+  }
+
+  /**
+   * Changing a room is scheduled by stay dates, not by today's housekeeping
+   * status. For an existing active room, the only business constraint is an
+   * overlapping active reservation (checked separately by assertNoConflict).
+   */
+  private async getRoomForDateBasedChange(roomId: string, database: Prisma.TransactionClient | PrismaService = this.prisma) {
+    const room = await database.room.findFirst({
+      where: { id: roomId, isActive: true, deletedAt: null },
+    });
+    if (!room) throw new NotFoundException('Phòng không tồn tại hoặc đã ngừng hoạt động');
     return room;
   }
 
@@ -188,7 +206,8 @@ export class ReservationActionsService {
 
   // ───────────────────────────── CANCEL ─────────────────────────────────────
   async cancel(id: string, dto: CancelReservationDto, userId?: string) {
-    const res = await this.getOrThrow(id);
+    const result = await this.inventory.reservation(id, undefined, async (tx) => {
+    const res = await this.getOrThrow(id, tx);
 
     const allowed = ['PENDING', 'BOOKED', 'PENDING_CHECKIN'];
     if (!allowed.includes(res.status)) {
@@ -201,13 +220,13 @@ export class ReservationActionsService {
 
     // Free the room back to VACANT if assigned
     if (res.roomId) {
-      await this.prisma.room.update({
+      await tx.room.update({
         where: { id: res.roomId },
         data: { status: RoomStatus.VACANT },
       });
     }
 
-    const cancelled = await this.prisma.reservation.update({
+    const cancelled = await tx.reservation.update({
       where: { id },
       data: {
         status: ReservationStatus.CANCELLED,
@@ -219,13 +238,16 @@ export class ReservationActionsService {
     });
 
     const formattedCancelled = this.withFormattedDates(cancelled);
-    void this.sendBookingWebhook('reservation.cancelled', formattedCancelled);
     return formattedCancelled;
+    });
+    void this.sendBookingWebhook('reservation.cancelled', result);
+    return result;
   }
 
   // ─────────────────────────── ASSIGN ROOM ──────────────────────────────────
   async assignRoom(id: string, dto: AssignRoomDto, userId?: string) {
-    const res = await this.getOrThrow(id);
+    const result = await this.inventory.reservation(id, dto.roomId, async (tx) => {
+    const res = await this.getOrThrow(id, tx);
 
     const allowed = ['PENDING', 'BOOKED'];
     if (!allowed.includes(res.status)) {
@@ -235,19 +257,19 @@ export class ReservationActionsService {
     }
 
     // Rule 6: no maintenance rooms
-    const room = await this.assertRoomUsable(dto.roomId);
+    const room = await this.assertRoomUsable(dto.roomId, tx);
 
     // Rule 1: no overlap
-    await this.assertNoConflict(dto.roomId, res.checkInDate, res.checkOutDate, id);
+    await this.assertNoConflict(dto.roomId, res.checkInDate, res.checkOutDate, id, tx);
 
     // Free old room if re-assigning
     if (res.roomId && res.roomId !== dto.roomId) {
-      await this.prisma.room.update({ where: { id: res.roomId }, data: { status: RoomStatus.VACANT } });
+      await tx.room.update({ where: { id: res.roomId }, data: { status: RoomStatus.VACANT } });
     }
 
-    await this.prisma.room.update({ where: { id: dto.roomId }, data: { status: RoomStatus.RESERVED } });
+    await tx.room.update({ where: { id: dto.roomId }, data: { status: RoomStatus.RESERVED } });
 
-    const updated = await this.prisma.reservation.update({
+    const updated = await tx.reservation.update({
       where: { id },
       data: {
         roomId: dto.roomId,
@@ -263,13 +285,16 @@ export class ReservationActionsService {
       include: INCLUDE,
     });
     const formatted = this.withFormattedDates(updated);
-    void this.sendBookingWebhook('reservation.room_assigned', formatted);
     return formatted;
+    });
+    void this.sendBookingWebhook('reservation.room_assigned', result);
+    return result;
   }
 
   // ─────────────────────────── CHANGE ROOM ──────────────────────────────────
   async changeRoom(id: string, dto: ChangeRoomDto, userId?: string) {
-    const res = await this.getOrThrow(id);
+    const result = await this.inventory.reservation(id, dto.newRoomId, async (tx) => {
+    const res = await this.getOrThrow(id, tx);
 
     const allowed = ['BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'];
     if (!allowed.includes(res.status)) {
@@ -282,24 +307,26 @@ export class ReservationActionsService {
       throw new BadRequestException('Phòng mới phải khác phòng hiện tại');
     }
 
-    // Rule 6 + Rule 4
-    const newRoom = await this.assertRoomUsable(dto.newRoomId);
-    await this.assertNoConflict(dto.newRoomId, res.checkInDate, res.checkOutDate, id);
+    // A change-room is driven solely by date availability. Do not reject
+    // VACANT / DIRTY / RESERVED / OCCUPIED / MAINTENANCE based on the room's
+    // current operational status; assertNoConflict is the deciding rule.
+    const newRoom = await this.getRoomForDateBasedChange(dto.newRoomId, tx);
+    await this.assertNoConflict(dto.newRoomId, res.checkInDate, res.checkOutDate, id, tx);
 
     const isInHouse = res.status === ReservationStatus.IN_HOUSE;
 
     // Old room: if guest was in it → DIRTY; otherwise free it → VACANT
-    await this.prisma.room.update({
+    await tx.room.update({
       where: { id: res.roomId },
       data: { status: isInHouse ? RoomStatus.DIRTY : RoomStatus.VACANT },
     });
     // New room: OCCUPIED if in-house, else RESERVED
-    await this.prisma.room.update({
+    await tx.room.update({
       where: { id: dto.newRoomId },
       data: { status: isInHouse ? RoomStatus.OCCUPIED : RoomStatus.RESERVED },
     });
 
-    const updated = await this.prisma.reservation.update({
+    const updated = await tx.reservation.update({
       where: { id },
       data: {
         roomId: dto.newRoomId,
@@ -314,13 +341,16 @@ export class ReservationActionsService {
       include: INCLUDE,
     });
     const formatted = this.withFormattedDates(updated);
-    void this.sendBookingWebhook('reservation.room_changed', formatted);
     return formatted;
+    });
+    void this.sendBookingWebhook('reservation.room_changed', result);
+    return result;
   }
 
   // ─────────────────────────── CHECK-IN ─────────────────────────────────────
   async checkIn(id: string, dto: CheckInDto, userId?: string) {
-    const res = await this.getOrThrow(id);
+    const result = await this.inventory.reservation(id, undefined, async (tx) => {
+    const res = await this.getOrThrow(id, tx);
 
     // Rule 2: must have a room
     if (!res.roomId) {
@@ -336,9 +366,9 @@ export class ReservationActionsService {
 
     const checkInTime = dto.actualCheckIn ? new Date(dto.actualCheckIn) : new Date();
 
-    await this.prisma.room.update({ where: { id: res.roomId }, data: { status: RoomStatus.OCCUPIED } });
+    await tx.room.update({ where: { id: res.roomId }, data: { status: RoomStatus.OCCUPIED } });
 
-    const updated = await this.prisma.reservation.update({
+    const updated = await tx.reservation.update({
       where: { id },
       data: {
         status: ReservationStatus.IN_HOUSE,
@@ -354,13 +384,16 @@ export class ReservationActionsService {
       include: INCLUDE,
     });
     const formatted = this.withFormattedDates(updated);
-    void this.sendBookingWebhook('reservation.checked_in', formatted);
     return formatted;
+    });
+    void this.sendBookingWebhook('reservation.checked_in', result);
+    return result;
   }
 
   // ─────────────────────────── CHECK-OUT ────────────────────────────────────
   async checkOut(id: string, dto: CheckOutDto, userId?: string) {
-    const res = await this.getOrThrow(id);
+    const result = await this.inventory.reservation(id, undefined, async (tx) => {
+    const res = await this.getOrThrow(id, tx);
 
     // Rule 3: must be IN_HOUSE
     if (res.status !== ReservationStatus.IN_HOUSE) {
@@ -372,9 +405,9 @@ export class ReservationActionsService {
     const checkOutTime = dto.actualCheckOut ? new Date(dto.actualCheckOut) : new Date();
 
     // Room → DIRTY after checkout (needs cleaning)
-    await this.prisma.room.update({ where: { id: res.roomId }, data: { status: RoomStatus.DIRTY } });
+    await tx.room.update({ where: { id: res.roomId }, data: { status: RoomStatus.DIRTY } });
 
-    const updated = await this.prisma.reservation.update({
+    const updated = await tx.reservation.update({
       where: { id },
       data: {
         status: ReservationStatus.CHECKED_OUT,
@@ -390,13 +423,16 @@ export class ReservationActionsService {
       include: INCLUDE,
     });
     const formatted = this.withFormattedDates(updated);
-    void this.sendBookingWebhook('reservation.checked_out', formatted);
     return formatted;
+    });
+    void this.sendBookingWebhook('reservation.checked_out', result);
+    return result;
   }
 
   // ─────────────────────────── EXTEND ───────────────────────────────────────
   async extend(id: string, dto: ExtendReservationDto, userId?: string) {
-    const res = await this.getOrThrow(id);
+    const result = await this.inventory.reservation(id, undefined, async (tx) => {
+    const res = await this.getOrThrow(id, tx);
 
     const allowed = ['BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'];
     if (!allowed.includes(res.status)) {
@@ -416,14 +452,14 @@ export class ReservationActionsService {
     }
 
     // Rule 1: check conflict for the EXTENDED window only
-    await this.assertNoConflict(res.roomId, res.checkOutDate, newCheckOut, id);
+    await this.assertNoConflict(res.roomId, res.checkOutDate, newCheckOut, id, tx);
 
     const newNights = Math.ceil(
       (newCheckOut.getTime() - res.checkInDate.getTime()) / 86_400_000,
     );
     const newTotal = Number(res.pricePerNight) * newNights - Number(res.discountAmount);
 
-    const updated = await this.prisma.reservation.update({
+    const updated = await tx.reservation.update({
       where: { id },
       data: {
         checkOutDate: newCheckOut,
@@ -440,8 +476,10 @@ export class ReservationActionsService {
       include: INCLUDE,
     });
     const formatted = this.withFormattedDates(updated);
-    void this.sendBookingWebhook('reservation.extended', formatted);
     return formatted;
+    });
+    void this.sendBookingWebhook('reservation.extended', result);
+    return result;
   }
 
   // ─────────────────────────── GET LOGS ─────────────────────────────────────

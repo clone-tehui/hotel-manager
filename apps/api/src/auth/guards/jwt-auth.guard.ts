@@ -1,11 +1,13 @@
-import { ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { API_KEY_SCOPE } from '../../api-keys/api-key-scope.decorator';
 import { AuthGuard } from '@nestjs/passport';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
-  constructor(private readonly prisma: PrismaService) {
+  constructor(private readonly prisma: PrismaService, private readonly reflector: Reflector) {
     super();
   }
 
@@ -22,6 +24,15 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
 
     if (apiKeyCandidate) {
       req.user = await this.validateApiKey(apiKeyCandidate);
+      const scope = this.reflector.get<string>(API_KEY_SCOPE, context.getHandler());
+      const chatbotKey = req.user.scopes.some((value: string) => value.startsWith('chatbot:'));
+      if (chatbotKey && scope && !req.user.scopes.includes(scope)) {
+        throw new ForbiddenException({ ok: false, statusCode: 403, code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE', error: { code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE' } });
+      }
+      if (chatbotKey && !scope) {
+        throw new ForbiddenException({ ok: false, statusCode: 403, code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE', error: { code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE' } });
+      }
+      if (scope) req.apiKey = { id: req.user.apiKeyId, scopes: req.user.scopes };
       return true;
     }
 

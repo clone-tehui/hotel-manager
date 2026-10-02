@@ -3,6 +3,35 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as ExcelJS from 'exceljs';
 import { Response } from 'express';
 
+const VN_TZ_OFFSET_HOURS = 7;
+const ACTIVE_SOURCE_LABELS = [
+  { key: 'airbnb', label: 'Airbnb' },
+  { key: 'trip', label: 'Trip.com' },
+  { key: 'agoda', label: 'Agoda' },
+  { key: 'booking', label: 'Booking.com' },
+  { key: 'zalo', label: 'Zalo' },
+  { key: 'sale', label: 'Sale' },
+  { key: 'khac', label: 'Khác' },
+] as const;
+
+function vietnamTodayRange() {
+  const now = new Date();
+  const vn = new Date(now.getTime() + VN_TZ_OFFSET_HOURS * 60 * 60 * 1000);
+  const start = new Date(Date.UTC(vn.getUTCFullYear(), vn.getUTCMonth(), vn.getUTCDate(), -VN_TZ_OFFSET_HOURS));
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+}
+
+function normalizeSource(value: string | null | undefined) {
+  const source = String(value || '').trim().toLowerCase();
+  if (source.includes('airbnb')) return 'airbnb';
+  if (source.includes('trip')) return 'trip';
+  if (source.includes('agoda')) return 'agoda';
+  if (source.includes('booking') || source.includes('bking')) return 'booking';
+  if (source.includes('zalo')) return 'zalo';
+  if (source.includes('sale')) return 'sale';
+  return 'khac';
+}
+
 function formatHotelDateTime(value: string | Date | null | undefined): string | null {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -111,6 +140,31 @@ export class TimelineService {
         checkOutDateFormatted: formatHotelDateTime(reservation.checkOutDate),
       };
     });
+  }
+
+  async getTodayInHouseBySource(buildingId?: string) {
+    const { start, end } = vietnamTodayRange();
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        deletedAt: null,
+        status: 'IN_HOUSE',
+        checkInDate: { lt: end },
+        checkOutDate: { gt: start },
+        ...(buildingId ? { room: { buildingId } } : {}),
+      },
+      select: { roomId: true, source: true },
+    });
+    const bySource = new Map<string, Set<string>>();
+    reservations.forEach((reservation) => {
+      const key = normalizeSource(reservation.source);
+      const rooms = bySource.get(key) ?? new Set<string>();
+      rooms.add(reservation.roomId);
+      bySource.set(key, rooms);
+    });
+    return {
+      total: new Set(reservations.map((reservation) => reservation.roomId)).size,
+      bySource: ACTIVE_SOURCE_LABELS.map(({ key, label }) => ({ key, label, rooms: bySource.get(key)?.size ?? 0 })),
+    };
   }
 
   async exportTimeline(query: any, res: Response) {

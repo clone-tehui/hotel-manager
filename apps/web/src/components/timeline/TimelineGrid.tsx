@@ -8,6 +8,10 @@ import { COUNTRY_OPTIONS } from '@/lib/countries';
 type TimelineDensity = 'compact' | 'comfortable' | 'spacious';
 type TimelineContrast = 'soft' | 'balanced' | 'strong';
 
+// Give booking labels enough horizontal space to show the guest name. The
+// timeline remains horizontally scrollable; this is intentionally visual-only.
+const DAY_COLUMN_WIDTH_SCALE = 2;
+
 interface Room {
   id: string;
   number: string;
@@ -34,23 +38,22 @@ interface Reservation {
   status: string;
 }
 
-type VisualReservationState = 'BOOKED' | 'PENDING_CHECKIN' | 'CHECKING_IN' | 'IN_HOUSE' | 'CHECKED_OUT' | 'CANCELLED';
+type VisualReservationState = 'BOOKED' | 'IN_HOUSE' | 'OVERDUE_CHECKOUT' | 'CHECKED_OUT' | 'CANCELLED';
 
 function getVisualReservationState(reservation: Reservation, now: dayjs.Dayjs): VisualReservationState {
   if (reservation.status === 'CANCELLED') return 'CANCELLED';
 
-  const checkIn = dayjs(reservation.checkInDate);
   const checkOut = dayjs(reservation.checkOutDate);
 
   if (reservation.status === 'CHECKED_OUT' || reservation.actualCheckOut) return 'CHECKED_OUT';
-  // A manual early/on-time check-in stays in the check-in colour for that
-  // operating day, then naturally becomes the in-house colour on later days.
-  if (reservation.status === 'IN_HOUSE' && reservation.actualCheckIn && now.isSame(dayjs(reservation.actualCheckIn), 'day')) return 'CHECKING_IN';
-  if (now.isSame(checkOut, 'day') || now.isAfter(checkOut, 'day')) return 'CHECKED_OUT';
-  if (now.isSame(checkIn, 'day')) return 'CHECKING_IN';
-  if (reservation.status === 'IN_HOUSE' || now.isAfter(checkIn, 'day')) return 'IN_HOUSE';
-  if (reservation.status === 'PENDING_CHECKIN') return 'PENDING_CHECKIN';
 
+  // Only a guest who has actually checked in can become overdue. A booking
+  // that has not checked in remains blue, even if its scheduled dates pass.
+  if (reservation.status === 'IN_HOUSE') {
+    return now.isAfter(checkOut) ? 'OVERDUE_CHECKOUT' : 'IN_HOUSE';
+  }
+
+  // BOOKED and PENDING_CHECKIN are both guests who have not stayed yet.
   return 'BOOKED';
 }
 
@@ -70,9 +73,8 @@ interface Props {
 
 const STATUS_BASE = {
   BOOKED: '#2585DD',
-  PENDING_CHECKIN: '#9926B7',
-  CHECKING_IN: '#E83808',
-  IN_HOUSE: '#FF963D',
+  IN_HOUSE: '#E53935',
+  OVERDUE_CHECKOUT: '#FF963D',
   CHECKED_OUT: '#E16BE1',
   CANCELLED: '#8B8B8B',
   DEFAULT: '#64748B',
@@ -192,10 +194,11 @@ export function EZCloudTimeline({ rooms, reservations, loading, days, dayWidth, 
   }, []);
 
   const adaptiveDayWidth = useMemo(() => {
-    if (!containerWidth) return dayWidth;
+    const expandedDayWidth = dayWidth * DAY_COLUMN_WIDTH_SCALE;
+    if (!containerWidth) return expandedDayWidth;
     const availableGridWidth = Math.max(0, containerWidth - roomColumnWidth);
     const ideal = Math.floor(availableGridWidth / Math.max(1, days.length));
-    return Math.max(metrics.minDay, ideal || dayWidth);
+    return Math.max(metrics.minDay, expandedDayWidth, ideal);
   }, [containerWidth, dayWidth, days.length, metrics, roomColumnWidth]);
 
   const totalW = days.length * adaptiveDayWidth;

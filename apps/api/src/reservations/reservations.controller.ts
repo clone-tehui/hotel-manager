@@ -17,6 +17,7 @@ import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
 import { ExtendReservationDto } from './dto/extend-reservation.dto';
 import { QueryQuickRoomSearchDto } from './dto/query-quick-room-search.dto';
+import { ApiKeyScope } from '../api-keys/api-key-scope.decorator';
 
 @ApiTags('Reservations')
 @ApiBearerAuth('JWT')
@@ -34,9 +35,16 @@ export class ReservationsController {
   findAll(@Query() q: QueryReservationDto) { return this.service.findAll(q); }
 
   @Get('quick-room-search')
+  @ApiKeyScope('chatbot:availability:read')
   @ApiOperation({ summary: 'Tìm phòng nhanh theo loại phòng và/hoặc khoảng ngày giờ' })
   quickRoomSearch(@Query() q: QueryQuickRoomSearchDto) {
     return this.service.quickRoomSearch(q);
+  }
+
+  @Get('vacant-today')
+  @ApiOperation({ summary: 'Danh sách căn trống từ ngày được chọn đến booking kế tiếp' })
+  vacantToday(@Query('date') date?: string, @Query('buildingId') buildingId?: string) {
+    return this.service.getVacantRoomsFromDate(date, buildingId);
   }
 
   @Get('zalo-thread-lookup')
@@ -124,5 +132,20 @@ export class ReservationsController {
   @ApiOperation({ summary: 'Lịch sử thao tác (audit log) của đặt phòng' })
   getLogs(@Param('id') id: string) {
     return this.actions.getLogs(id);
+  }
+}
+
+@ApiTags('Public Availability')
+@Controller('public/availability')
+export class PublicAvailabilityController {
+  constructor(private readonly service: ReservationsService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Tra cứu căn còn trống theo ngày, không cần đăng nhập' })
+  findAvailable(
+    @Query('checkInDate') checkInDate: string,
+    @Query('checkOutDate') checkOutDate: string,
+  ) {
+    return this.service.publicRoomAvailability(checkInDate, checkOutDate);
   }
 }

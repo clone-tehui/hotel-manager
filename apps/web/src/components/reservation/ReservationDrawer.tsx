@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Drawer, Box, Typography, IconButton, Divider, Button, Stack, Chip,
   TextField, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -19,7 +19,7 @@ import { useRouter } from 'next/navigation';
 import { StatusChip } from '@/components/common/StatusChip';
 import {
   useReservation, useReservationLogs, useCheckIn, useCheckOut,
-  useCancelReservation, useExtendReservation, useChangeRoom, useRooms,
+  useUpdateReservation, useExtendReservation, useChangeRoom, useQuickRoomSearch,
 } from '@/hooks/api';
 import { useToast } from '@/providers/ToastProvider';
 import { ReservationForm } from './ReservationForm';
@@ -67,7 +67,7 @@ export function ReservationDrawer({ reservationId, onClose }: Props) {
 
   const checkIn   = useCheckIn();
   const checkOut  = useCheckOut();
-  const cancel    = useCancelReservation();
+  const updateReservation = useUpdateReservation();
   const extend    = useExtendReservation();
   const changeRoom = useChangeRoom();
 
@@ -88,9 +88,19 @@ export function ReservationDrawer({ reservationId, onClose }: Props) {
     (input as any).showPicker?.();
   };
 
-  // Available rooms for change-room (exclude current)
-  const { data: roomsData } = useRooms({ limit: 100, status: 'VACANT', buildingId: res?.room?.building?.id ?? undefined });
-  const availableRooms: any[] = (roomsData?.data?.data ?? []).filter((r: any) => r.id !== res?.roomId);
+  // Change-room must use availability for this reservation's actual dates, not
+  // the room's current housekeeping status. A DIRTY room may be free by the stay.
+  const changeRoomSearchParams = useMemo(() => (
+    res?.checkInDate && res?.checkOutDate
+      ? { checkInDate: res.checkInDate, checkOutDate: res.checkOutDate }
+      : undefined
+  ), [res?.checkInDate, res?.checkOutDate]);
+  const { data: availableRoomsData, isFetching: availableRoomsLoading } = useQuickRoomSearch(
+    changeRoomSearchParams,
+    !!changeRoomSearchParams,
+  );
+  const availableRooms: any[] = (Array.isArray(availableRoomsData?.data) ? availableRoomsData.data : [])
+    .filter((room: any) => room.roomId !== res?.roomId);
 
   const handleAction = async (action: () => Promise<any>, msg: string) => {
     try { await action(); toast(msg); }
@@ -104,10 +114,13 @@ export function ReservationDrawer({ reservationId, onClose }: Props) {
 
   const canCheckIn   = res && ['BOOKED', 'PENDING_CHECKIN'].includes(res.status);
   const canCheckOut  = res?.status === 'IN_HOUSE';
-  const canCancel    = res && ['PENDING', 'BOOKED', 'PENDING_CHECKIN'].includes(res.status);
+  const canCancel    = res && ['PENDING', 'BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'].includes(res.status);
   const canExtend    = res && ['BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'].includes(res.status);
   const canChangeRoom = res && ['BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'].includes(res.status) && res.roomId;
-  const canEdit      = res && ['PENDING', 'BOOKED', 'PENDING_CHECKIN'].includes(res.status);
+  // All reservations, including bookings imported from EZCloud and completed
+  // stays, can be corrected from Timeline. Operational actions (check-in,
+  // check-out, cancel) keep their own status rules above.
+  const canEdit      = !!res;
 
   return (
     <>
@@ -283,9 +296,16 @@ export function ReservationDrawer({ reservationId, onClose }: Props) {
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button onClick={() => setCancelDialog(false)}>Bỏ qua</Button>
-          <Button variant="contained" color="error" disabled={cancelReason.length < 5 || cancel.isPending}
-            onClick={() => handleAction(async () => { await cancel.mutateAsync({ id: res!.id, cancelReason }); setCancelDialog(false); setCancelReason(''); }, 'Đã huỷ đặt phòng')}>
-            {cancel.isPending ? <CircularProgress size={18} color="inherit" /> : 'Xác nhận huỷ'}
+          <Button variant="contained" color="error" disabled={cancelReason.length < 5 || updateReservation.isPending}
+            onClick={() => handleAction(async () => {
+              await updateReservation.mutateAsync({
+                id: res!.id,
+                status: 'CANCELLED',
+                notes: [res!.notes, `Đã huỷ booking: ${cancelReason}`].filter(Boolean).join('\n'),
+              });
+              setCancelDialog(false); setCancelReason('');
+            }, 'Đã huỷ đặt phòng')}>
+            {updateReservation.isPending ? <CircularProgress size={18} color="inherit" /> : 'Xác nhận huỷ'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -320,14 +340,16 @@ export function ReservationDrawer({ reservationId, onClose }: Props) {
         <DialogTitle fontWeight={700}>Đổi phòng</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" mb={2}>
-            Phòng hiện tại: <strong>{res?.room?.number}</strong> — chọn phòng mới cùng toà (đang trống)
+            Phòng hiện tại: <strong>{res?.room?.number}</strong> — chỉ hiển thị các căn trống đúng trong khoảng ngày của booking.
           </Typography>
           <Stack spacing={2}>
             <TextField select fullWidth label="Phòng mới *" value={newRoomId} onChange={(e) => setNewRoomId(e.target.value)}>
-              {availableRooms.length === 0
-                ? <MenuItem disabled value="">Không có phòng trống phù hợp</MenuItem>
+              {availableRoomsLoading
+                ? <MenuItem disabled value="">Đang kiểm tra phòng trống…</MenuItem>
+                : availableRooms.length === 0
+                ? <MenuItem disabled value="">Không có phòng trống phù hợp trong khoảng ngày này</MenuItem>
                 : availableRooms.map((r: any) => (
-                    <MenuItem key={r.id} value={r.id}>{r.number} — {r.roomType?.name}</MenuItem>
+                    <MenuItem key={r.roomId} value={r.roomId}>{r.roomNumber} — {r.building?.name ?? '—'} — {r.roomType?.name}</MenuItem>
                   ))
               }
             </TextField>

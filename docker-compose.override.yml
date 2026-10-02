@@ -1,0 +1,35 @@
+services:
+  api:
+    container_name: hotel_api
+    image: chihome-chatbot-api:20261002
+    networks: [existing_hotel_network]
+    volumes:
+      - existing_uploads:/app/uploads
+    environment:
+      CHATBOT_HOLD_TTL_MINUTES: ${CHATBOT_HOLD_TTL_MINUTES:-15}
+  web:
+    container_name: hotel_web
+    image: chihome-chatbot-web-local:20261002
+    networks: [existing_hotel_network]
+  db:
+    container_name: hotel_db
+    networks: [existing_hotel_network]
+    volumes:
+      - existing_postgres:/var/lib/postgresql/data
+  migrate:
+    image: chihome-chatbot-api:20261002
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]
+    networks: [existing_hotel_network]
+
+networks:
+  existing_hotel_network:
+    external: true
+    name: hotelmanagetest_hotel_network
+
+volumes:
+  existing_postgres:
+    external: true
+    name: hotelmanagetest_hotel_postgres_data
+  existing_uploads:
+    external: true
+    name: hotelmanagetest_hotel_uploads_data

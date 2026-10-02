@@ -4,14 +4,14 @@ import { Providers } from '@/providers/Providers';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://chiluxe.vn'),
-  title: 'Hotel Manager – Hệ thống quản lý đặt phòng',
+  title: 'ChiHome – Hệ thống quản lý đặt phòng',
   description: 'Hệ thống quản lý đặt phòng lưu trú chuyên nghiệp',
   icons: {
     icon: '/icon.png',
     apple: '/apple-icon.png',
   },
   openGraph: {
-    title: 'Hotel Manager – Hệ thống quản lý đặt phòng',
+    title: 'ChiHome – Hệ thống quản lý đặt phòng',
     description: 'Hệ thống quản lý đặt phòng lưu trú chuyên nghiệp',
     images: ['/opengraph-image.png'],
   },

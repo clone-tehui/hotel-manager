@@ -23,6 +23,12 @@ export class TimelineController {
     return this.timelineService.getTimelineData({ from, to, buildingId, status });
   }
 
+  @Get('today-in-house-by-source')
+  @ApiOperation({ summary: 'Số căn đang có khách hôm nay theo nền tảng' })
+  getTodayInHouseBySource(@Query('buildingId') buildingId?: string) {
+    return this.timelineService.getTodayInHouseBySource(buildingId);
+  }
+
   @Get('export')
   @ApiOperation({ summary: 'Xuất dữ liệu timeline ra Excel/CSV' })
   async export(@Query() query: TimelineExportDto, @Res() res: Response) {

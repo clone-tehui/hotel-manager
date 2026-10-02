@@ -1,7 +1,8 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Response } from 'express';
 
 @ApiTags('Dashboard')
 @ApiBearerAuth('JWT')
@@ -14,6 +15,12 @@ export class DashboardController {
   @ApiOperation({ summary: 'Thống kê tổng quan dashboard' })
   getSummary() {
     return this.dashboardService.getSummary();
+  }
+
+  @Get('daily-room-movements/export')
+  @ApiOperation({ summary: 'Xuất báo cáo căn Check-in / Check-out hôm nay ra Excel' })
+  exportDailyRoomMovements(@Res() res: Response) {
+    return this.dashboardService.exportDailyRoomMovements(res);
   }
 
   @Get('report')

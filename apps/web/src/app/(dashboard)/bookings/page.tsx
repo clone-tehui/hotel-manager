@@ -17,7 +17,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import dayjs from 'dayjs';
 import { useSearchParams } from 'next/navigation';
-import { useReservations, useBuildings, useCancelReservation, useCheckIn, useCheckOut } from '@/hooks/api';
+import { useReservations, useBuildings, useUpdateReservation, useCheckIn, useCheckOut } from '@/hooks/api';
 import { ReservationDrawer } from '@/components/reservation/ReservationDrawer';
 import { ReservationForm } from '@/components/reservation/ReservationForm';
 import { LoadingState, EmptyState } from '@/components/common/States';
@@ -80,14 +80,14 @@ function BookingsPageContent() {
     return matchSearch && matchBuilding && matchGender;
   });
 
-  const cancelMut = useCancelReservation();
+  const updateReservation = useUpdateReservation();
   const checkInMut = useCheckIn();
   const checkOutMut = useCheckOut();
 
   const handleCancel = async () => {
     if (!cancelTarget) return;
     try {
-      await cancelMut.mutateAsync({ id: cancelTarget.id, cancelReason: 'Huỷ từ danh sách booking' });
+      await updateReservation.mutateAsync({ id: cancelTarget.id, status: 'CANCELLED' });
       toast('Đã huỷ booking', 'success');
       setCancelTarget(null);
     } catch (e: any) {
@@ -188,7 +188,7 @@ function BookingsPageContent() {
                 const st = STATUS_LABELS[r.status] ?? { label: r.status, color: 'default' };
                 const canCheckin = ['BOOKED', 'PENDING_CHECKIN'].includes(r.status);
                 const canCheckout = r.status === 'IN_HOUSE';
-                const canCancel = ['PENDING', 'BOOKED', 'PENDING_CHECKIN'].includes(r.status);
+                const canCancel = ['PENDING', 'BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'].includes(r.status);
                 return (
                   <TableRow key={r.id} hover sx={{ cursor: 'pointer' }}>
                     <TableCell onClick={() => setSelectedId(r.id)}><Typography variant="body2" fontWeight={600} color="primary">{r.reservationCode}</Typography></TableCell>
@@ -223,7 +223,7 @@ function BookingsPageContent() {
             const st = STATUS_LABELS[r.status] ?? { label: r.status, color: 'default' };
             const canCheckin = ['BOOKED', 'PENDING_CHECKIN'].includes(r.status);
             const canCheckout = r.status === 'IN_HOUSE';
-            const canCancel = ['PENDING', 'BOOKED', 'PENDING_CHECKIN'].includes(r.status);
+            const canCancel = ['PENDING', 'BOOKED', 'PENDING_CHECKIN', 'IN_HOUSE'].includes(r.status);
             return (
               <Paper key={r.id} variant="outlined" sx={{ p: 1.5 }}>
                 <Stack spacing={1}>
@@ -259,9 +259,9 @@ function BookingsPageContent() {
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={() => setCancelTarget(null)} disabled={cancelMut.isPending}>Đóng</Button>
-          <Button variant="contained" color="error" onClick={handleCancel} disabled={cancelMut.isPending}>
-            {cancelMut.isPending ? 'Đang huỷ...' : 'Xác nhận huỷ'}
+          <Button onClick={() => setCancelTarget(null)} disabled={updateReservation.isPending}>Đóng</Button>
+          <Button variant="contained" color="error" onClick={handleCancel} disabled={updateReservation.isPending}>
+            {updateReservation.isPending ? 'Đang huỷ...' : 'Xác nhận huỷ'}
           </Button>
         </DialogActions>
       </Dialog>

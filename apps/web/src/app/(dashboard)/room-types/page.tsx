@@ -1,4 +1,5 @@
 'use client';
+import StayDiscountRulesDialog from '@/components/room/StayDiscountRulesDialog';
 import { useState } from 'react';
 import { RouteGuard } from '@/components/layout/RouteGuard';
 import {
@@ -18,6 +19,7 @@ import CategoryIcon from '@mui/icons-material/Category';
 const EMPTY = { name: '', description: '', basePrice: '', maxGuests: 2, amenities: '' };
 
 export default function RoomTypesPage() {
+  const [discountTarget, setDiscountTarget] = useState<any>(null);
   const { toast } = useToast();
   const { data, isLoading } = useRoomTypes();
   const roomTypes = data?.data ?? [];
@@ -109,6 +111,7 @@ export default function RoomTypesPage() {
                   </TableCell>
                   <TableCell><Chip label={rt._count?.rooms ?? 0} size="small" /></TableCell>
                   <TableCell align="right">
+                    <Button size="small" onClick={() => setDiscountTarget(rt)}>Giảm giá lưu trú</Button>
                     <IconButton size="small" onClick={() => openEdit(rt)}><EditIcon fontSize="small" /></IconButton>
                     <IconButton size="small" color="error" onClick={() => setDeleteTarget(rt)} title="Xóa loại phòng">
                       <DeleteOutlineIcon fontSize="small" />
@@ -154,6 +157,7 @@ export default function RoomTypesPage() {
         </DialogActions>
       </Dialog>
     </Box>
+    <StayDiscountRulesDialog roomType={discountTarget} onClose={() => setDiscountTarget(null)} />
     </RouteGuard>
   );
 }

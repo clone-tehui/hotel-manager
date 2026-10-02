@@ -41,10 +41,12 @@ import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import PieChartOutlineIcon from '@mui/icons-material/PieChartOutline';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import DownloadIcon from '@mui/icons-material/Download';
 import dayjs from 'dayjs';
 import quarterOfYear from 'dayjs/plugin/quarterOfYear';
 import 'dayjs/locale/vi';
 import { useAiCeoCampaigns, useDashboardCustomerReport, useDashboardReport, useDashboardSummary } from '@/hooks/api';
+import { apiClient } from '@/lib/api';
 import { StatusChip } from '@/components/common/StatusChip';
 import { ReservationDrawer } from '@/components/reservation/ReservationDrawer';
 
@@ -448,6 +450,7 @@ export default function DashboardPage() {
   const [customerReportValue, setCustomerReportValue] = useState(() => dayjs().format('YYYY-MM'));
   const [quickRevenuePeriod, setQuickRevenuePeriod] = useState<RevenuePeriod>('month');
   const [quickRevenueMonth, setQuickRevenueMonth] = useState(() => dayjs().format('YYYY-MM'));
+  const [dailyMovementExporting, setDailyMovementExporting] = useState(false);
   const { data, isLoading } = useDashboardSummary();
   const occupancyRange = useMemo(() => {
     const now = dayjs();
@@ -517,6 +520,22 @@ export default function DashboardPage() {
   }, [customerReportPeriod, customerReportValue]);
   const { data: customerReportData, isLoading: isCustomerReportLoading } = useDashboardCustomerReport(customerReportRange);
   const summary = data?.data;
+
+  const exportDailyRoomMovements = async () => {
+    try {
+      setDailyMovementExporting(true);
+      const content: any = await apiClient.get('/dashboard/daily-room-movements/export', { responseType: 'blob' });
+      const blob = new Blob([content], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `checkin_checkout_${dayjs().format('YYYYMMDD')}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDailyMovementExporting(false);
+    }
+  };
 
   if (isLoading && !summary) {
     return (
@@ -629,7 +648,12 @@ export default function DashboardPage() {
         </Grid>
       </Grid>
 
-      <SectionCard title="Báo cáo căn Check-in / Check-out hôm nay" sub={`${reservations.arrivalRoomsToday ?? 0} căn Check-in · ${reservations.checkoutRoomsToday ?? 0} căn Check-out`} icon={<EventAvailableIcon color="primary" fontSize="small" />}>
+      <SectionCard
+        title="Báo cáo căn Check-in / Check-out hôm nay"
+        sub={`${reservations.arrivalRoomsToday ?? 0} căn Check-in · ${reservations.checkoutRoomsToday ?? 0} căn Check-out`}
+        icon={<EventAvailableIcon color="primary" fontSize="small" />}
+        action={<Button size="small" variant="outlined" startIcon={dailyMovementExporting ? <CircularProgress size={14} color="inherit" /> : <DownloadIcon />} disabled={dailyMovementExporting} onClick={exportDailyRoomMovements}>Xuất Excel</Button>}
+      >
         {(reservations.dailyRoomMovements ?? []).length === 0 ? (
           <Typography variant="body2" color="text.secondary">Không có căn Check-in hoặc Check-out hôm nay.</Typography>
         ) : (

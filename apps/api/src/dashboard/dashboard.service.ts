@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReservationStatus, RoomStatus } from '@prisma/client';
+import * as ExcelJS from 'exceljs';
+import { Response } from 'express';
 
 const VN_TZ_OFFSET_HOURS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -34,6 +36,7 @@ type ReservationAnalyticsItem = {
   checkOutDate: Date;
   createdAt: Date;
   totalAmount: any;
+  monthlyRate?: any;
   pricePerNight: any;
   totalNights: number;
   status: ReservationStatus;
@@ -129,7 +132,7 @@ function overlapNights(rangeStart: Date, rangeEnd: Date, checkIn: Date, checkOut
   return Math.round((end - start) / MS_PER_DAY);
 }
 
-type RevenueStay = { totalAmount: any; totalNights?: number | null; checkInDate: Date; checkOutDate: Date };
+type RevenueStay = { totalAmount: any; monthlyRate?: any; totalNights?: number | null; checkInDate: Date; checkOutDate: Date };
 
 function stayNights(stay: RevenueStay) {
   const storedNights = Number(stay.totalNights ?? 0);
@@ -139,7 +142,18 @@ function stayNights(stay: RevenueStay) {
 }
 
 // Revenue is recognised per stayed night, rather than all at once on check-in.
+// Long-term leases may instead have a fixed price for every calendar month.
+// In that case a complete calendar month always recognises exactly monthlyRate;
+// partial months are pro-rated by that month's number of nights.
 function recognisedRevenue(stay: RevenueStay, rangeStart: Date, rangeEnd: Date) {
+  const monthlyRate = toNumber(stay.monthlyRate);
+  if (monthlyRate > 0) {
+    let revenue = 0;
+    forEachRecognisedNight(stay, rangeStart, rangeEnd, (_dateKey, nightlyRevenue) => {
+      revenue += nightlyRevenue;
+    });
+    return revenue;
+  }
   return (toNumber(stay.totalAmount) / stayNights(stay))
     * overlapNights(rangeStart, rangeEnd, stay.checkInDate, stay.checkOutDate);
 }
@@ -156,8 +170,13 @@ function vnDateKey(date: Date) {
 function forEachRecognisedNight(stay: RevenueStay, rangeStart: Date, rangeEnd: Date, callback: (dateKey: string, revenue: number) => void) {
   const start = Math.max(startOfVnDay(stay.checkInDate).getTime(), rangeStart.getTime());
   const end = Math.min(startOfVnDay(stay.checkOutDate).getTime(), rangeEnd.getTime());
-  const nightlyRevenue = toNumber(stay.totalAmount) / stayNights(stay);
   for (let cursor = new Date(start); cursor.getTime() < end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const monthlyRate = toNumber(stay.monthlyRate);
+    const vn = getVnParts(cursor);
+    const nightsInMonth = new Date(Date.UTC(vn.year, vn.month, 0)).getUTCDate();
+    const nightlyRevenue = monthlyRate > 0
+      ? monthlyRate / nightsInMonth
+      : toNumber(stay.totalAmount) / stayNights(stay);
     callback(vnDateKey(cursor), nightlyRevenue);
   }
 }
@@ -224,6 +243,7 @@ export class DashboardService {
           checkOutDate: true,
           createdAt: true,
           totalAmount: true,
+          monthlyRate: true,
           totalNights: true,
           adults: true,
           children: true,
@@ -495,6 +515,7 @@ export class DashboardService {
           checkOutDate: true,
           createdAt: true,
           totalAmount: true,
+          monthlyRate: true,
           pricePerNight: true,
           totalNights: true,
           status: true,
@@ -757,5 +778,49 @@ export class DashboardService {
       },
       customers: customerRows,
     };
+  }
+
+  async exportDailyRoomMovements(res: Response) {
+    const summary = await this.getSummary();
+    const movements = summary.reservations.dailyRoomMovements ?? [];
+    const today = getVnParts();
+    const dateLabel = `${String(today.day).padStart(2, '0')}/${String(today.month).padStart(2, '0')}/${today.year}`;
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ChiLuxe Hotel Manager';
+    const worksheet = workbook.addWorksheet('Check-in Check-out');
+
+    worksheet.addRow(['BÁO CÁO CĂN CHECK-IN / CHECK-OUT HÔM NAY']);
+    worksheet.mergeCells('A1:D1');
+    worksheet.getCell('A1').font = { bold: true, size: 14 };
+    worksheet.getCell('A1').alignment = { horizontal: 'center' };
+    worksheet.addRow([`Ngày: ${dateLabel}`]);
+    worksheet.mergeCells('A2:D2');
+    worksheet.addRow([`Tổng số căn Check-in: ${summary.reservations.arrivalRoomsToday ?? 0}`, `Tổng số căn Check-out: ${summary.reservations.checkoutRoomsToday ?? 0}`]);
+    worksheet.mergeCells('A3:B3');
+    worksheet.mergeCells('C3:D3');
+    worksheet.addRow([]);
+
+    const header = worksheet.addRow(['STT', 'Mã căn hộ', 'Khách Check-out', 'Khách Check-in']);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    movements.forEach((movement, index) => {
+      const row = worksheet.addRow([index + 1, movement.roomNumber, movement.checkOutGuests?.join(', ') || '—', movement.checkInGuests?.join(', ') || '—']);
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: 'top', wrapText: true };
+        cell.border = { top: { style: 'thin', color: { argb: 'FFD9E2F3' } }, left: { style: 'thin', color: { argb: 'FFD9E2F3' } }, bottom: { style: 'thin', color: { argb: 'FFD9E2F3' } }, right: { style: 'thin', color: { argb: 'FFD9E2F3' } } };
+      });
+    });
+    worksheet.columns = [{ width: 8 }, { width: 18 }, { width: 42 }, { width: 42 }];
+    worksheet.views = [{ state: 'frozen', ySplit: 5 }];
+
+    const dateFile = `${today.year}${String(today.month).padStart(2, '0')}${String(today.day).padStart(2, '0')}`;
+    res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.header('Content-Disposition', `attachment; filename=checkin_checkout_${dateFile}.xlsx`);
+    await workbook.xlsx.write(res);
+    res.end();
   }
 }

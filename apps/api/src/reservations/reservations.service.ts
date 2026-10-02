@@ -4,6 +4,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import axios from 'axios';
+import { InventoryLockService, activeHoldWhere } from '../pricing/inventory-lock.service';
 
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
@@ -77,7 +78,7 @@ function hasExplicitTime(input: string | Date): boolean {
   return /T\d{2}:\d{2}/.test(input);
 }
 
-function normalizeHotelCheckIn(input: string | Date): Date {
+export function normalizeHotelCheckIn(input: string | Date): Date {
   if (typeof input === 'string' && !hasExplicitTime(input)) {
     const dateOnlyMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (dateOnlyMatch) {
@@ -91,7 +92,7 @@ function normalizeHotelCheckIn(input: string | Date): Date {
   return d;
 }
 
-function normalizeHotelCheckOut(input: string | Date): Date {
+export function normalizeHotelCheckOut(input: string | Date): Date {
   if (typeof input === 'string' && !hasExplicitTime(input)) {
     const dateOnlyMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (dateOnlyMatch) {
@@ -105,7 +106,12 @@ function normalizeHotelCheckOut(input: string | Date): Date {
   return d;
 }
 
-function calcNights(checkIn: string, checkOut: string): number {
+function formatHotelDate(value: Date) {
+  const shifted = new Date(value.getTime() + HOTEL_TIMEZONE_OFFSET_HOURS * 60 * 60 * 1000);
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+}
+
+export function calcNights(checkIn: string, checkOut: string): number {
   const diff = normalizeHotelCheckOut(checkOut).getTime() - normalizeHotelCheckIn(checkIn).getTime();
   const nights = Math.ceil(diff / (1000 * 60 * 60 * 24));
   if (nights < 1) throw new BadRequestException('Ngày trả phòng phải sau ngày nhận phòng ít nhất 1 đêm');
@@ -151,6 +157,7 @@ export class ReservationsService {
 
   constructor(
     private prisma: PrismaService,
+    private readonly inventory: InventoryLockService,
     private eventEmitter: EventEmitter2
   ) { }
 
@@ -241,15 +248,20 @@ export class ReservationsService {
     const where: any = {
       deletedAt: null,
       isActive: true,
+      status: { not: RoomStatus.MAINTENANCE },
     };
 
     if (roomTypeId) where.roomTypeId = roomTypeId;
     if (buildingId) where.buildingId = buildingId;
 
     if (normalizedCheckIn && normalizedCheckOut) {
+      where.holds = { none: { ...activeHoldWhere(), checkInDate: { lt: normalizedCheckOut }, checkOutDate: { gt: normalizedCheckIn } } };
       where.reservations = {
         none: {
-          status: { in: ACTIVE_RESERVATION_STATUSES },
+          deletedAt: null,
+          // Search availability follows scheduled booking dates, so every
+          // non-cancelled booking reserves its room for the whole stay.
+          status: { not: ReservationStatus.CANCELLED },
           AND: [
             { checkInDate: { lt: normalizedCheckOut } },
             { checkOutDate: { gt: normalizedCheckIn } },
@@ -263,6 +275,7 @@ export class ReservationsService {
       select: {
         id: true,
         number: true,
+        floor: true,
         description: true,
         price: true,
         discountablePrice: true,
@@ -272,23 +285,185 @@ export class ReservationsService {
         building: { select: { id: true, code: true, name: true } },
         roomType: { select: { id: true, name: true } },
       },
-      orderBy: [
-        { building: { code: 'asc' } },
-        { number: 'asc' },
-      ],
     });
+
+    const buildingOrder = (building: { code?: string | null; name?: string | null } | null) => {
+      const label = `${building?.code ?? ''} ${building?.name ?? ''}`.toUpperCase();
+      if (label.includes('OPERA')) return 0;
+      if (label.includes('GALLERIA')) return 1;
+      if (label.includes('CREST')) return 2;
+      return 3;
+    };
 
     return rooms.map((room) => ({
       roomId: room.id,
       roomCode: room.number,
       roomNumber: room.number,
-      description: room.description ?? '',
+      floor: room.floor,
+      description: room.description ?? String(),
       price: room.price,
       discountablePrice: room.discountablePrice,
       building: room.building,
       roomType: room.roomType,
       images: room.images.map((image) => image.url),
-    }));
+    })).sort((a, b) => (
+      buildingOrder(a.building) - buildingOrder(b.building)
+      || Number(a.floor ?? 0) - Number(b.floor ?? 0)
+      || a.roomNumber.localeCompare(b.roomNumber, 'vi', { numeric: true })
+    ));
+  }
+
+  async publicRoomAvailability(checkInDate: string, checkOutDate: string) {
+    const validCalendarDate = (value: string) => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const [year, month, day] = value.split('-').map(Number);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      return date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day;
+    };
+
+    if (!validCalendarDate(checkInDate) || !validCalendarDate(checkOutDate)) {
+      throw new BadRequestException('Ngày nhận và trả phòng phải theo định dạng YYYY-MM-DD');
+    }
+
+    const checkIn = normalizeHotelCheckIn(checkInDate);
+    const checkOut = normalizeHotelCheckOut(checkOutDate);
+    const nights = Math.round((Date.parse(`${checkOutDate}T00:00:00Z`) - Date.parse(`${checkInDate}T00:00:00Z`)) / 86_400_000);
+    if (checkInDate < formatHotelDate(new Date())) {
+      throw new BadRequestException('Ngày nhận phòng không được ở trong quá khứ');
+    }
+    if (nights < 1 || nights > 365) {
+      throw new BadRequestException('Vui lòng chọn thời gian lưu trú từ 1 đến 365 đêm');
+    }
+
+    const rooms = await this.prisma.room.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        status: { not: RoomStatus.MAINTENANCE },
+        holds: { none: { ...activeHoldWhere(), checkInDate: { lt: checkOut }, checkOutDate: { gt: checkIn } } },
+        reservations: {
+          none: {
+            deletedAt: null,
+            status: { not: ReservationStatus.CANCELLED },
+            checkInDate: { lt: checkOut },
+            checkOutDate: { gt: checkIn },
+          },
+        },
+      },
+      select: {
+        number: true,
+        floor: true,
+        building: { select: { code: true, name: true } },
+        roomType: { select: { name: true } },
+      },
+    });
+
+    const buildingRank = (code: string) => {
+      const normalized = code.toUpperCase();
+      if (normalized.includes('OPERA')) return 0;
+      if (normalized.includes('GALLERIA')) return 1;
+      if (normalized.includes('CREST')) return 2;
+      return 3;
+    };
+
+    const availableRooms = rooms.map((room) => ({
+      roomCode: room.number,
+      floor: room.floor,
+      building: room.building.name,
+      buildingCode: room.building.code,
+      roomType: room.roomType.name,
+    })).sort((a, b) =>
+      buildingRank(a.buildingCode) - buildingRank(b.buildingCode)
+      || (a.floor ?? 0) - (b.floor ?? 0)
+      || a.roomCode.localeCompare(b.roomCode, 'vi', { numeric: true })
+    );
+
+    return { checkInDate, checkOutDate, nights, total: availableRooms.length, rooms: availableRooms };
+  }
+
+  /**
+   * Returns rooms that can accept a check-in on the selected day and the first
+   * following booking, so reception can see each continuous vacant window.
+   */
+  async getVacantRoomsFromDate(dateInput?: string, buildingId?: string) {
+    const start = normalizeHotelCheckIn(dateInput || formatHotelDate(new Date()));
+    if (Number.isNaN(start.getTime())) throw new BadRequestException('Ngày cần xem không hợp lệ');
+
+    const rooms = await this.prisma.room.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        ...(buildingId ? { buildingId } : {}),
+        // A maintenance unit is not a sellable vacant unit for this quick list.
+        status: { not: RoomStatus.MAINTENANCE },
+      },
+      select: {
+        id: true,
+        number: true,
+        floor: true,
+        status: true,
+        building: { select: { code: true, name: true } },
+        roomType: { select: { name: true } },
+        reservations: {
+          where: {
+            deletedAt: null,
+            // The quick list follows the booked timeline, not a live room
+            // status. Any non-cancelled reservation blocks its scheduled stay.
+            status: { not: ReservationStatus.CANCELLED },
+            checkOutDate: { gt: start },
+          },
+          select: { checkInDate: true, checkOutDate: true },
+          orderBy: { checkInDate: 'asc' },
+        },
+      },
+      orderBy: [{ building: { code: 'asc' } }, { number: 'asc' }],
+    });
+
+    const buildingOrder = (building: { code?: string | null; name?: string | null } | null) => {
+      const label = `${building?.code ?? ''} ${building?.name ?? ''}`.toUpperCase();
+      if (label.includes('OPERA')) return 0;
+      if (label.includes('GALLERIA')) return 1;
+      if (label.includes('CREST')) return 2;
+      return 3;
+    };
+    const roomsWithVacancy = rooms.flatMap((room) => {
+      // An active stay whose dates overlap the requested check-in makes this
+      // room unavailable on that day. A checkout before 14:00 is free today.
+      const occupiedAtStart = room.reservations.some((reservation) => (
+        reservation.checkInDate < start && reservation.checkOutDate > start
+      ));
+      if (occupiedAtStart) return [];
+
+      const nextBooking = room.reservations.find((reservation) => reservation.checkInDate >= start);
+      // A check-in on the selected date means the apartment has no sellable
+      // vacant night from that date, even when its check-in time is later.
+      if (nextBooking && formatHotelDate(nextBooking.checkInDate) === formatHotelDate(start)) return [];
+      const freeUntil = nextBooking?.checkInDate ?? null;
+      const freeNights = freeUntil
+        ? Math.max(0, Math.ceil((freeUntil.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)))
+        : null;
+
+      return [{
+        roomId: room.id,
+        roomNumber: room.number,
+        floor: room.floor,
+        building: room.building,
+        roomType: room.roomType,
+        vacantFrom: formatHotelDate(start),
+        vacantUntil: freeUntil ? formatHotelDate(freeUntil) : null,
+        freeNights,
+      }];
+    }).sort((a, b) => (
+      buildingOrder(a.building) - buildingOrder(b.building)
+      || Number(a.floor ?? 0) - Number(b.floor ?? 0)
+      || a.roomNumber.localeCompare(b.roomNumber, 'vi', { numeric: true })
+    ));
+
+    return {
+      date: formatHotelDate(start),
+      total: roomsWithVacancy.length,
+      rooms: roomsWithVacancy,
+    };
   }
 
   // ── Find All ────────────────────────────────────────────────────────────────
@@ -380,30 +555,9 @@ export class ReservationsService {
   // ── Create ──────────────────────────────────────────────────────────────────
   async create(dto: CreateReservationDto, userId?: string) {
     const actorUserId = normalizeActorUserId(userId);
-    const room = await this.prisma.room.findUnique({ where: { id: dto.roomId } });
-    if (!room || !room.isActive) throw new NotFoundException('Phòng không tồn tại');
-    if (room.status === RoomStatus.MAINTENANCE) throw new BadRequestException('Phòng đang bảo trì');
-
     const normalizedCheckIn = normalizeHotelCheckIn(dto.checkInDate);
     const normalizedCheckOut = normalizeHotelCheckOut(dto.checkOutDate);
     const totalNights = calcNights(dto.checkInDate, dto.checkOutDate);
-
-    // Check date conflict for same room
-    const conflict = await this.prisma.reservation.findFirst({
-      where: {
-        roomId: dto.roomId,
-        status: { in: ACTIVE_RESERVATION_STATUSES },
-        AND: [
-          { checkInDate: { lt: normalizedCheckOut } },
-          { checkOutDate: { gt: normalizedCheckIn } },
-        ],
-      },
-    });
-    if (conflict) {
-      throw new ConflictException(
-        `Phòng đã có đặt phòng #${conflict.reservationCode} trong khoảng thời gian này`,
-      );
-    }
 
     const discount = dto.discountAmount ?? 0;
     const totalAmount = dto.pricePerNight * totalNights - discount;
@@ -414,7 +568,9 @@ export class ReservationsService {
       ? ReservationStatus.PENDING_CHECKIN
       : ReservationStatus.BOOKED;
 
-    const reservation = await this.prisma.$transaction(async (tx) => {
+    const reservation = await this.inventory.transaction(async (tx) => {
+      await this.inventory.rooms(tx, [dto.roomId]);
+      await this.inventory.assertAvailable(tx, dto.roomId, normalizedCheckIn, normalizedCheckOut);
       const created = await tx.reservation.create({
         data: {
           reservationCode: generateCode(),
@@ -460,29 +616,45 @@ export class ReservationsService {
 
   }
 
+  async announceCreated(id: string) {
+    const reservation = await this.findOne(id);
+    this.eventEmitter.emit('reservation.created', reservation);
+    void this.sendBookingWebhook('reservation.created', reservation);
+  }
+
   // ── Update ──────────────────────────────────────────────────────────────────
   async update(id: string, dto: UpdateReservationDto, userId?: string) {
     const actorUserId = normalizeActorUserId(userId);
-    const existing = await this.findOne(id);
+    let existing: any;
+    const updated = await this.inventory.reservation(id, dto.roomId, async (tx) => {
+      existing = await tx.reservation.findUnique({ where: { id }, include: RES_INCLUDE });
 
     // Status transition side effects
     const data: any = { ...dto };
+    const targetRoomId = dto.roomId ?? existing.roomId;
+    const targetCheckIn = dto.checkInDate ? normalizeHotelCheckIn(dto.checkInDate) : existing.checkInDate;
+    const targetCheckOut = dto.checkOutDate ? normalizeHotelCheckOut(dto.checkOutDate) : existing.checkOutDate;
+    const targetStatus = dto.status ?? existing.status;
+    const changesInventory = dto.roomId !== undefined || dto.checkInDate !== undefined || dto.checkOutDate !== undefined || (dto.status !== undefined && dto.status !== existing.status && ![ReservationStatus.CANCELLED, ReservationStatus.CHECKED_OUT].includes(dto.status as any));
+    if (changesInventory && targetStatus !== ReservationStatus.CANCELLED) {
+      await this.inventory.assertAvailable(tx, targetRoomId, targetCheckIn, targetCheckOut, id);
+    }
     if (dto.status === ReservationStatus.IN_HOUSE && !existing.actualCheckIn) {
       data.actualCheckIn = dto.actualCheckIn ? new Date(dto.actualCheckIn) : new Date();
-      await this.prisma.room.update({
+      await tx.room.update({
         where: { id: existing.roomId },
         data: { status: RoomStatus.OCCUPIED },
       });
     }
     if (dto.status === ReservationStatus.CHECKED_OUT && !existing.actualCheckOut) {
       data.actualCheckOut = dto.actualCheckOut ? new Date(dto.actualCheckOut) : new Date();
-      await this.prisma.room.update({
+      await tx.room.update({
         where: { id: existing.roomId },
         data: { status: RoomStatus.DIRTY },
       });
     }
     if (dto.status === ReservationStatus.CANCELLED) {
-      await this.prisma.room.update({
+      await tx.room.update({
         where: { id: existing.roomId },
         data: { status: RoomStatus.VACANT },
       });
@@ -495,28 +667,13 @@ export class ReservationsService {
       const price = dto.pricePerNight ?? Number(existing.pricePerNight);
       const discount = dto.discountAmount ?? Number(existing.discountAmount);
 
-      const conflict = await this.prisma.reservation.findFirst({
-        where: {
-          roomId: existing.roomId,
-          id: { not: id },
-          status: { in: ACTIVE_RESERVATION_STATUSES },
-          AND: [
-            { checkInDate: { lt: checkOut } },
-            { checkOutDate: { gt: checkIn } },
-          ],
-        },
-      });
-      if (conflict) {
-        throw new ConflictException(`Phòng đã có đặt phòng #${conflict.reservationCode} trong khoảng thời gian này`);
-      }
-
       data.checkInDate = checkIn;
       data.checkOutDate = checkOut;
       data.totalNights = calcNights(checkIn.toISOString(), checkOut.toISOString());
       data.totalAmount = price * data.totalNights - discount;
     }
 
-    const updated = await this.prisma.reservation.update({
+    return tx.reservation.update({
       where: { id },
       data: {
         ...data,
@@ -530,6 +687,8 @@ export class ReservationsService {
         },
       },
       include: RES_INCLUDE,
+    });
+
     });
 
     const formattedUpdated = this.withFormattedDates(updated);

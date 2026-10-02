@@ -111,6 +111,7 @@ export default function Sidebar({ mobileOpen = false, onMobileClose, isDesktop =
 
         {showAdminSections && (
           <NavGroup label="Hệ thống">
+            <NavItem href="/quan-ly-trang-phong" label="Trang kiểm tra phòng" icon={<HotelIcon fontSize="small" />} active={isActive('/quan-ly-trang-phong')} onClick={onMobileClose} />
             <NavItem href="/users" label="Người dùng" icon={<ManageAccountsIcon fontSize="small" />} active={isActive('/users')} onClick={onMobileClose} />
             <NavItem href="/settings" label="Cài đặt" icon={<SettingsIcon fontSize="small" />} active={isActive('/settings')} onClick={onMobileClose} />
           </NavGroup>

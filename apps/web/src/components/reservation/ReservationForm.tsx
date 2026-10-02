@@ -348,6 +348,7 @@ export function ReservationForm({ open, onClose, initialRoomId, initialDate, ini
           id: reservationId,
           primaryGuestName: form.fullName,
           company: form.company || undefined,
+          source: form.source,
           checkInDate: form.checkInDate,
           checkOutDate: form.checkOutDate,
           adults: Number(form.adults),
@@ -442,15 +443,15 @@ export function ReservationForm({ open, onClose, initialRoomId, initialDate, ini
                 </FormControl>
               </Grid>
             )}
+            <Grid item xs={12} sm={6}>
+              <TextField select fullWidth label="Nền tảng *" value={form.source} onChange={set('source')} disabled={sourceLocked}>
+                {SOURCE_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
             {!isEdit && (
               <>
-                <Grid item xs={12} sm={6}>
-                  <TextField select fullWidth label="Nền tảng *" value={form.source} onChange={set('source')} disabled={sourceLocked}>
-                    {SOURCE_OPTIONS.map((option) => (
-                      <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
-                    ))}
-                  </TextField>
-                </Grid>
                 <Grid item xs={12} sm={6}>
                   <TextField
                     fullWidth

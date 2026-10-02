@@ -7,6 +7,7 @@ import Sidebar, { SIDEBAR_WIDTH } from './Sidebar';
 import Topbar from './Topbar';
 
 function resolveTitle(pathname: string) {
+  if (pathname.startsWith('/quan-ly-trang-phong')) return 'Quản lý trang kiểm tra phòng';
   if (pathname.startsWith('/dashboard')) return 'Dashboard';
   if (pathname.startsWith('/timeline')) return 'Timeline';
   if (pathname.startsWith('/bookings')) return 'Đặt phòng';
