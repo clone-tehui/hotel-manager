@@ -134,6 +134,14 @@ export class HousekeepingSyncService {
       throw new ConflictException('ROOM_UNDER_MAINTENANCE');
     }
 
+    const approvedAt = new Date(input.approvedAt);
+    if (Number.isNaN(approvedAt.getTime())) {
+      throw new BadRequestException('approvedAt phải là ISO datetime hợp lệ');
+    }
+    if (room.updatedAt.getTime() > approvedAt.getTime()) {
+      throw new ConflictException('STALE_CLEANING_APPROVAL');
+    }
+
     const now = new Date();
     const [inHouse, nextReservation] = await this.prisma.$transaction([
       this.prisma.reservation.findFirst({
