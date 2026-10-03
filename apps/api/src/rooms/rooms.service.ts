@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { paginate, paginatedResponse } from '../common/dto/pagination.dto';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 const ROOM_IMAGE_SELECT = {
   id: true,
@@ -30,7 +31,7 @@ function normalizeNullableNumber(value: unknown) {
 
 @Injectable()
 export class RoomsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private readonly eventEmitter: EventEmitter2) {}
 
   async findAll(query: any) {
     const page = Number(query.page) || 1;
@@ -132,7 +133,7 @@ export class RoomsService {
       throw new BadRequestException('Không thể kích hoạt phòng trong toà nhà đã ngừng hoạt động');
     }
 
-    return this.prisma.room.update({
+    const updated = await this.prisma.room.update({
       where: { id },
       data: {
         ...dto,
@@ -145,6 +146,21 @@ export class RoomsService {
       },
       include: ROOM_INCLUDE,
     });
+
+    if (dto.status !== undefined && dto.status !== room.status) {
+      this.eventEmitter.emit('room.status_changed', {
+        id: updated.id,
+        roomId: updated.id,
+        number: updated.number,
+        floor: updated.floor,
+        status: updated.status,
+        isActive: updated.isActive,
+        updatedAt: updated.updatedAt,
+        building: updated.building,
+      });
+    }
+
+    return updated;
   }
 
   async listImages(roomId: string) {
