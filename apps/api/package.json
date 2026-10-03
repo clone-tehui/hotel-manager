@@ -33,7 +33,8 @@
     "test:campaign-measurement": "ts-node src/ai-ceo-agent/runtime/campaign-measurement.test.ts",
     "test:measured-learning": "ts-node src/ai-ceo-agent/runtime/measured-learning.test.ts",
     "test:batch-circuit": "ts-node src/ai-ceo-agent/runtime/batch-circuit.integration.test.ts",
-    "test:ota-connectors": "ts-node src/ota-connectors/ota-connector.policy.test.ts"
+    "test:ota-connectors": "ts-node src/ota-connectors/ota-connector.policy.test.ts",
+    "test:housekeeping-sync": "ts-node src/housekeeping-sync/housekeeping-sync.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
