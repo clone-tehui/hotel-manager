@@ -20,6 +20,7 @@ import { OtaConnectorsModule } from './ota-connectors/ota-connectors.module';
 import { PublicListingsModule } from './public-listings/public-listings.module';
 import { PricingModule } from './pricing/pricing.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
+import { HousekeepingSyncModule } from './housekeeping-sync/housekeeping-sync.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ChatbotModule } from './chatbot/chatbot.module';
     PublicListingsModule,
     PricingModule,
     ChatbotModule,
+    HousekeepingSyncModule,
   ],
 })
 export class AppModule {}
