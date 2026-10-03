@@ -138,12 +138,8 @@ export class HousekeepingSyncService {
     if (Number.isNaN(approvedAt.getTime())) {
       throw new BadRequestException('approvedAt phải là ISO datetime hợp lệ');
     }
-    if (room.updatedAt.getTime() > approvedAt.getTime()) {
-      throw new ConflictException('STALE_CLEANING_APPROVAL');
-    }
-
     const now = new Date();
-    const [inHouse, nextReservation] = await this.prisma.$transaction([
+    const [inHouse, nextReservation, newerCheckout] = await this.prisma.$transaction([
       this.prisma.reservation.findFirst({
         where: {
           roomId,
@@ -162,7 +158,21 @@ export class HousekeepingSyncService {
         select: { id: true, checkInDate: true },
         orderBy: { checkInDate: 'asc' },
       }),
+      this.prisma.reservation.findFirst({
+        where: {
+          roomId,
+          deletedAt: null,
+          status: ReservationStatus.CHECKED_OUT,
+          actualCheckOut: { gt: approvedAt },
+        },
+        select: { id: true, actualCheckOut: true },
+        orderBy: { actualCheckOut: 'desc' },
+      }),
     ]);
+
+    if (newerCheckout) {
+      throw new ConflictException('STALE_CLEANING_APPROVAL');
+    }
 
     if (inHouse || room.status === RoomStatus.OCCUPIED) {
       throw new ConflictException('ROOM_ALREADY_OCCUPIED');
