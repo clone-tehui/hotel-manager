@@ -141,7 +141,7 @@ export class WebhooksService {
       this.logger.warn(`Webhook to ${currentWebhook.url} failed (attempt ${attempt}). Retrying...`);
       // Simple exponential backoff: 2s, 4s
       setTimeout(() => {
-        void this.deliverWebhook(webhook, event, payload, attempt + 1).catch((error) => {
+        void this.deliverWebhook(webhook, event, payload, attempt + 1, eventId, occurredAt).catch((error) => {
           this.logger.error(`Webhook retry crashed for ${webhook.id}: ${error?.message ?? error}`);
         });
       }, attempt * 2000);
