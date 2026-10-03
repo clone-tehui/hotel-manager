@@ -52,12 +52,21 @@ export class WebhooksService {
 
     if (webhooks.length === 0) return;
 
+    const eventId = crypto.randomUUID();
+    const occurredAt = new Date().toISOString();
     for (const webhook of webhooks) {
-      await this.deliverWebhook(webhook, event, payload);
+      await this.deliverWebhook(webhook, event, payload, 1, eventId, occurredAt);
     }
   }
 
-  async deliverWebhook(webhook: any, event: string, payload: any, attempt = 1) {
+  async deliverWebhook(
+    webhook: any,
+    event: string,
+    payload: any,
+    attempt = 1,
+    eventId = crypto.randomUUID(),
+    occurredAt = new Date().toISOString(),
+  ) {
     const maxRetries = 3;
     const currentWebhook = attempt > 1
       ? await this.prisma.webhookIntegration.findUnique({ where: { id: webhook.id } })
@@ -68,18 +77,41 @@ export class WebhooksService {
       return;
     }
 
+    const entityType = event.split('.')[0] || null;
+    const entityId = payload?.id ?? payload?.reservationId ?? payload?.roomId ?? payload?.orderId ?? null;
+    const entityUpdatedAt = payload?.updatedAt
+      ?? payload?.actualCheckOut
+      ?? payload?.actualCheckIn
+      ?? payload?.cancelledAt
+      ?? payload?.paidAt
+      ?? occurredAt;
     const envelope = event === 'addon_order.paid'
       ? {
+          eventId,
           event,
-          timestamp: new Date().toISOString(),
+          occurredAt,
+          timestamp: occurredAt,
+          entityType,
+          entityId,
+          entityUpdatedAt,
           ...payload,
           paymentTime: payload?.paidAt ?? null,
         }
-      : { event, payload, timestamp: new Date().toISOString() };
+      : {
+          eventId,
+          event,
+          occurredAt,
+          timestamp: occurredAt,
+          entityType,
+          entityId,
+          entityUpdatedAt,
+          payload,
+        };
     const body = JSON.stringify(envelope);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'User-Agent': 'HotelManager-Webhook/1.0',
+      'X-Webhook-Timestamp': occurredAt,
     };
 
     if (currentWebhook.secret) {
