@@ -25,11 +25,13 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     if (apiKeyCandidate) {
       req.user = await this.validateApiKey(apiKeyCandidate);
       const scope = this.reflector.get<string>(API_KEY_SCOPE, context.getHandler());
-      const chatbotKey = req.user.scopes.some((value: string) => value.startsWith('chatbot:'));
-      if (chatbotKey && scope && !req.user.scopes.includes(scope)) {
+      const restrictedIntegrationKey = req.user.scopes.some((value: string) => (
+        value.startsWith('chatbot:') || value.startsWith('housekeeping:')
+      ));
+      if (restrictedIntegrationKey && scope && !req.user.scopes.includes(scope)) {
         throw new ForbiddenException({ ok: false, statusCode: 403, code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE', error: { code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE' } });
       }
-      if (chatbotKey && !scope) {
+      if (restrictedIntegrationKey && !scope) {
         throw new ForbiddenException({ ok: false, statusCode: 403, code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE', error: { code: 'INSUFFICIENT_SCOPE', message: 'INSUFFICIENT_SCOPE' } });
       }
       if (scope) req.apiKey = { id: req.user.apiKeyId, scopes: req.user.scopes };
