@@ -1,0 +1,47 @@
+name: Housekeeping Integration CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/src/housekeeping-sync/**'
+      - 'apps/api/src/webhooks/**'
+      - 'apps/api/src/reservations/**'
+      - 'apps/api/src/rooms/**'
+      - 'apps/api/src/auth/**'
+      - 'apps/api/src/app.module.ts'
+      - 'apps/api/package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/housekeeping-integration-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/api/src/housekeeping-sync/**'
+      - 'apps/api/src/webhooks/**'
+      - 'apps/api/src/reservations/**'
+      - 'apps/api/src/rooms/**'
+      - 'apps/api/src/auth/**'
+      - 'apps/api/src/app.module.ts'
+      - 'apps/api/package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: housekeeping-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: corepack prepare pnpm@10.33.2 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter api db:generate
+      - run: pnpm --filter api build
+      - run: pnpm --filter api test:pricing
+      - run: pnpm --filter api test:jwt-policy
