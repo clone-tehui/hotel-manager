@@ -16,6 +16,7 @@ import { ChangeRoomDto } from './dto/change-room.dto';
 import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
 import { ExtendReservationDto } from './dto/extend-reservation.dto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 /** Statuses considered "active" – used for conflict detection */
 const ACTIVE: ReservationStatus[] = [
@@ -115,7 +116,11 @@ async function postBookingWebhook(url: string, payload: any) {
 export class ReservationActionsService {
   private readonly logger = new Logger(ReservationActionsService.name);
 
-  constructor(private prisma: PrismaService, private readonly inventory: InventoryLockService) {}
+  constructor(
+    private prisma: PrismaService,
+    private readonly inventory: InventoryLockService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   private withFormattedDates<T extends { checkInDate?: string | Date | null; checkOutDate?: string | Date | null }>(reservation: T): T & {
     checkInDateFormatted: string | null;
@@ -240,6 +245,7 @@ export class ReservationActionsService {
     const formattedCancelled = this.withFormattedDates(cancelled);
     return formattedCancelled;
     });
+    this.eventEmitter.emit('reservation.cancelled', result);
     void this.sendBookingWebhook('reservation.cancelled', result);
     return result;
   }
@@ -287,6 +293,7 @@ export class ReservationActionsService {
     const formatted = this.withFormattedDates(updated);
     return formatted;
     });
+    this.eventEmitter.emit('reservation.updated', result);
     void this.sendBookingWebhook('reservation.room_assigned', result);
     return result;
   }
@@ -343,6 +350,28 @@ export class ReservationActionsService {
     const formatted = this.withFormattedDates(updated);
     return formatted;
     });
+    const roomChangeLog = await this.prisma.reservationLog.findFirst({
+      where: { reservationId: id, action: 'ROOM_CHANGED' },
+      select: { oldValue: true, newValue: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const oldRoomId = (roomChangeLog?.oldValue as any)?.roomId ?? null;
+    const newRoomId = (roomChangeLog?.newValue as any)?.roomId ?? result.roomId ?? null;
+    const [oldRoom, newRoom] = await Promise.all([
+      oldRoomId
+        ? this.prisma.room.findUnique({
+            where: { id: oldRoomId },
+            select: { id: true, number: true, floor: true, status: true, updatedAt: true, building: { select: { id: true, code: true, name: true } } },
+          })
+        : Promise.resolve(null),
+      newRoomId
+        ? this.prisma.room.findUnique({
+            where: { id: newRoomId },
+            select: { id: true, number: true, floor: true, status: true, updatedAt: true, building: { select: { id: true, code: true, name: true } } },
+          })
+        : Promise.resolve(null),
+    ]);
+    this.eventEmitter.emit('reservation.room_changed', { ...result, oldRoom, newRoom });
     void this.sendBookingWebhook('reservation.room_changed', result);
     return result;
   }
@@ -386,6 +415,7 @@ export class ReservationActionsService {
     const formatted = this.withFormattedDates(updated);
     return formatted;
     });
+    this.eventEmitter.emit('reservation.checked_in', result);
     void this.sendBookingWebhook('reservation.checked_in', result);
     return result;
   }
@@ -425,6 +455,7 @@ export class ReservationActionsService {
     const formatted = this.withFormattedDates(updated);
     return formatted;
     });
+    this.eventEmitter.emit('reservation.checked_out', result);
     void this.sendBookingWebhook('reservation.checked_out', result);
     return result;
   }
@@ -478,6 +509,7 @@ export class ReservationActionsService {
     const formatted = this.withFormattedDates(updated);
     return formatted;
     });
+    this.eventEmitter.emit('reservation.updated', result);
     void this.sendBookingWebhook('reservation.extended', result);
     return result;
   }
